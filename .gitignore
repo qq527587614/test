@@ -1,0 +1,43 @@
+# .NET
+bin/
+obj/
+*.dll
+*.exe
+*.pdb
+*.user
+*.suo
+*.cache
+*.log
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.swp
+
+# Build outputs
+publish/
+out/
+
+# NuGet
+packages/
+*.nupkg
+
+# Test results
+TestResults/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Local config
+appsettings.Development.json
+appsettings.Local.json
+*.local.json
+
+# Logs
+logs/
+*.log
+
+# Comate
+.comate/
