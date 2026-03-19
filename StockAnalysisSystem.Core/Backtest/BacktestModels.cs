@@ -14,6 +14,18 @@ public class BacktestSettings
 }
 
 /// <summary>
+/// 每日选股回测设置
+/// </summary>
+public class DailyPickBacktestSettings
+{
+    public DateTime StartDate { get; set; }
+    public DateTime EndDate { get; set; }
+    public int SharesPerPick { get; set; } = 100;        // 每次选股买入股数（整手）
+    public decimal Commission { get; set; } = 0.00025m;  // 手续费率
+    public decimal Slippage { get; set; } = 0.001m;      // 滑点
+}
+
+/// <summary>
 /// 回测进度
 /// </summary>
 public class BacktestProgress

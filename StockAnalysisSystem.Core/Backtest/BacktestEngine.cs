@@ -17,6 +17,7 @@ public class BacktestEngine
     private readonly IStockDailyDataRepository _dailyDataRepo;
     private readonly IIndicatorRepository _indicatorRepo;
     private readonly IBacktestTaskRepository _backtestTaskRepo;
+    private readonly IDailyPickRepository _dailyPickRepo;
     private readonly ILogger<BacktestEngine>? _logger;
 
     public BacktestEngine(
@@ -24,12 +25,14 @@ public class BacktestEngine
         IStockDailyDataRepository dailyDataRepo,
         IIndicatorRepository indicatorRepo,
         IBacktestTaskRepository backtestTaskRepo,
+        IDailyPickRepository dailyPickRepo,
         ILogger<BacktestEngine>? logger = null)
     {
         _stockRepo = stockRepo;
         _dailyDataRepo = dailyDataRepo;
         _indicatorRepo = indicatorRepo;
         _backtestTaskRepo = backtestTaskRepo;
+        _dailyPickRepo = dailyPickRepo;
         _logger = logger;
     }
 
@@ -441,6 +444,183 @@ public class BacktestEngine
 
             if (result.AverageLoss > 0)
                 result.ProfitFactor = result.AverageProfit / result.AverageLoss;
+        }
+    }
+
+    /// <summary>
+    /// 执行每日选股回测
+    /// </summary>
+    public async Task<BacktestResult> RunDailyPickBacktestAsync(
+        DateTime startDate,
+        DateTime endDate,
+        DailyPickBacktestSettings? settings = null,
+        IProgress<string>? progress = null)
+    {
+        settings ??= new DailyPickBacktestSettings { StartDate = startDate, EndDate = endDate };
+        var result = new BacktestResult
+        {
+            StartDate = startDate,
+            EndDate = endDate,
+            InitialCapital = 0  // 不使用资金管理
+        };
+
+        try
+        {
+            progress?.Report("加载每日选股记录...");
+            var dailyPicks = await _dailyPickRepo.GetByDateRangeAsync(startDate, endDate);
+
+            if (dailyPicks.Count == 0)
+            {
+                progress?.Report("没有找到每日选股记录");
+                return result;
+            }
+
+            progress?.Report($"加载了 {dailyPicks.Count} 条每日选股记录");
+
+            // 获取所有涉及的股票ID
+            var stockIds = dailyPicks.Select(p => p.StockId).Distinct().ToList();
+            progress?.Report($"涉及 {stockIds.Count} 只股票");
+
+            // 加载所有股票的日线数据
+            progress?.Report("加载日线数据...");
+            var allDailyData = await _dailyDataRepo.GetByDateRangeAsync(
+                startDate.AddDays(-10),
+                endDate.AddDays(30));  // 多加载一些数据，防止数据不足
+
+            var dailyDataByStock = allDailyData.ToLookup(d => d.StockID);
+            result.TradingDays = dailyDataByStock.First().Count();
+
+            progress?.Report("开始回测...");
+            var trades = new List<TradeRecord>();
+            var skippedCount = 0;
+
+            foreach (var pick in dailyPicks)
+            {
+                try
+                {
+                    // 获取选股当日的开盘价
+                    var stockData = dailyDataByStock[pick.StockId]
+                        .FirstOrDefault(d => d.TradeDate == pick.TradeDate);
+
+                    if (stockData == null)
+                    {
+                        skippedCount++;
+                        continue;
+                    }
+
+                    var buyPrice = stockData.OpenPrice * (1 + settings.Slippage);
+                    var buyDate = pick.TradeDate;
+
+                    // 查找卖出日（回测结束日或数据最后一天）
+                    var endDateForStock = Math.Min(
+                        endDate.AddDays(30).Ticks,
+                        dailyDataByStock[pick.StockId].Max(d => d.TradeDate.Ticks));
+
+                    var sellData = dailyDataByStock[pick.StockId]
+                        .FirstOrDefault(d => d.TradeDate.Ticks == endDateForStock);
+
+                    if (sellData == null)
+                    {
+                        skippedCount++;
+                        continue;
+                    }
+
+                    var sellPrice = sellData.ClosePrice * (1 - settings.Slippage);
+                    var sellDate = sellData.TradeDate;
+
+                    // 计算交易盈亏
+                    var shares = settings.SharesPerPick;
+                    var buyAmount = buyPrice * shares;
+                    var sellAmount = sellPrice * shares;
+                    var commission = (buyAmount + sellAmount) * settings.Commission;
+                    var profitLoss = sellAmount - buyAmount - commission;
+                    var profitLossPercent = profitLoss / buyAmount * 100;
+                    var holdingDays = (sellDate - buyDate).Days;
+
+                    // 记录交易
+                    trades.Add(new TradeRecord
+                    {
+                        StockId = pick.StockId,
+                        StockCode = pick.StockCode,
+                        StockName = pick.StockName,
+                        BuyDate = buyDate,
+                        BuyPrice = buyPrice,
+                        Shares = shares,
+                        SellDate = sellDate,
+                        SellPrice = sellPrice,
+                        ProfitLoss = profitLoss,
+                        ProfitLossPercent = profitLossPercent,
+                        Commission = commission,
+                        HoldingDays = holdingDays,
+                        SellReason = "每日选股回测"
+                    });
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogError(ex, "回测选股记录失败: {StockCode} {Date}", pick.StockCode, pick.TradeDate);
+                    skippedCount++;
+                }
+            }
+
+            result.Trades = trades;
+            progress?.Report($"回测完成，共 {trades.Count} 笔交易，跳过 {skippedCount} 笔");
+
+            // 计算绩效指标
+            CalculateDailyPickPerformanceMetrics(result);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "每日选股回测失败");
+            progress?.Report($"回测失败: {ex.Message}");
+        }
+
+        return result;
+    }
+
+    private void CalculateDailyPickPerformanceMetrics(BacktestResult result)
+    {
+        if (result.Trades.Count == 0)
+        {
+            result.TotalReturn = 0;
+            result.WinRate = 0;
+            result.TradeCount = 0;
+            result.WinCount = 0;
+            result.LossCount = 0;
+            return;
+        }
+
+        result.TradeCount = result.Trades.Count;
+        result.WinCount = result.Trades.Count(t => t.ProfitLoss > 0);
+        result.LossCount = result.Trades.Count(t => t.ProfitLoss < 0);
+        result.WinRate = (decimal)result.WinCount / result.TradeCount * 100;
+
+        var profits = result.Trades.Where(t => t.ProfitLoss > 0).Select(t => t.ProfitLoss).ToList();
+        var losses = result.Trades.Where(t => t.ProfitLoss < 0).Select(t => Math.Abs(t.ProfitLoss)).ToList();
+
+        result.AverageProfit = profits.Count > 0 ? profits.Average() : 0;
+        result.AverageLoss = losses.Count > 0 ? losses.Average() : 0;
+        result.MaxProfit = profits.Count > 0 ? profits.Max() : 0;
+        result.MaxLoss = losses.Count > 0 ? losses.Max() : 0;
+
+        // 计算总盈亏和总收益率
+        var totalProfitLoss = result.Trades.Sum(t => t.ProfitLoss);
+        var totalInvested = result.Trades.Sum(t => t.BuyPrice * t.Shares);
+        result.TotalReturn = totalInvested > 0 ? totalProfitLoss / totalInvested * 100 : 0;
+        result.FinalEquity = totalProfitLoss;
+
+        // 计算盈亏比
+        if (result.AverageLoss > 0)
+            result.ProfitFactor = result.AverageProfit / result.AverageLoss;
+
+        // 计算年化收益率（简化计算）
+        var days = (result.EndDate - result.StartDate).Days;
+        if (days > 0)
+        {
+            var years = days / 365m;
+            result.AnnualReturn = (decimal)Math.Pow(
+                (double)((totalInvested + totalProfitLoss) / totalInvested),
+                1.0 / (double)years) - 1;
+            result.AnnualReturn *= 100;
         }
     }
 }

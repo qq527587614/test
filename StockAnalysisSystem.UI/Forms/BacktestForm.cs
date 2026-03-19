@@ -13,6 +13,7 @@ public partial class BacktestForm : Form
     private readonly IStrategyRepository _strategyRepo;
     private readonly IServiceProvider _serviceProvider;
 
+    private TabControl _tabControl = null!;
     private ComboBox _cboStrategy = null!;
     private DateTimePicker _dtpStart = null!;
     private DateTimePicker _dtpEnd = null!;
@@ -24,6 +25,17 @@ public partial class BacktestForm : Form
     private DataGridView _dataGridView = null!;
     private FormsPlot _equityChart = null!;
     private System.Windows.Forms.Label _lblResult = null!;
+
+    // 每日选股回测控件
+    private DateTimePicker _dtpPickStart = null!;
+    private DateTimePicker _dtpPickEnd = null!;
+    private NumericUpDown _numSharesPerPick = null!;
+    private NumericUpDown _numPickCommission = null!;
+    private NumericUpDown _numPickSlippage = null!;
+    private Button _btnRunPickBacktest = null!;
+    private ProgressBar _progressBarPick = null!;
+    private DataGridView _dataGridViewPick = null!;
+    private System.Windows.Forms.Label _lblPickResult = null!;
 
     private List<Strategy> _strategies = new();
 
@@ -41,6 +53,25 @@ public partial class BacktestForm : Form
     {
         Size = new Size(1200, 800);
 
+        // 创建标签页控件
+        _tabControl = new TabControl { Dock = DockStyle.Fill };
+
+        // 标签页1：策略回测
+        var tabPageStrategy = new TabPage("策略回测");
+        CreateStrategyBacktestUI(tabPageStrategy);
+        _tabControl.TabPages.Add(tabPageStrategy);
+
+        // 标签页2：每日选股回测
+        var tabPagePick = new TabPage("每日选股回测");
+        CreatePickBacktestUI(tabPagePick);
+        _tabControl.TabPages.Add(tabPagePick);
+
+        Controls.Add(_tabControl);
+        Text = "回测系统";
+    }
+
+    private void CreateStrategyBacktestUI(Control parent)
+    {
         // 参数设置面板
         var settingsPanel = new GroupBox { Text = "回测参数", Dock = DockStyle.Top, Height = 120, Padding = new Padding(10) };
         
@@ -109,9 +140,71 @@ public partial class BacktestForm : Form
         resultPanel.Controls.Add(chartPanel);   // 中部：资金曲线
         resultPanel.Controls.Add(statsPanel);  // 上部：回测结果
 
-        Controls.AddRange(new Control[] { resultPanel, settingsPanel });
+        parent.Controls.AddRange(new Control[] { resultPanel, settingsPanel });
+    }
 
-        Text = "策略回测";
+    private void CreatePickBacktestUI(Control parent)
+    {
+        // 参数设置面板
+        var settingsPanel = new GroupBox { Text = "每日选股回测参数", Dock = DockStyle.Top, Height = 100, Padding = new Padding(10) };
+
+        int y = 25;
+        var lblStart = new Label { Text = "开始日期:", Left = 20, Top = y, Width = 70 };
+        _dtpPickStart = new DateTimePicker { Left = 90, Top = y - 3, Width = 150, Value = DateTime.Today.AddMonths(-3) };
+
+        var lblEnd = new Label { Text = "结束日期:", Left = 260, Top = y, Width = 70 };
+        _dtpPickEnd = new DateTimePicker { Left = 330, Top = y - 3, Width = 150, Value = DateTime.Today };
+
+        y += 35;
+        var lblShares = new Label { Text = "买入股数:", Left = 20, Top = y, Width = 70 };
+        _numSharesPerPick = new NumericUpDown { Left = 90, Top = y - 3, Width = 100, Minimum = 100, Maximum = 10000, Value = 100, Increment = 100 };
+
+        var lblCommission = new Label { Text = "手续费率:", Left = 210, Top = y, Width = 60 };
+        _numPickCommission = new NumericUpDown { Left = 270, Top = y - 3, Width = 80, Minimum = 0, Maximum = 1, Value = (decimal)0.00025, DecimalPlaces = 5, Increment = (decimal)0.0001 };
+
+        var lblSlippage = new Label { Text = "滑点:", Left = 370, Top = y, Width = 60 };
+        _numPickSlippage = new NumericUpDown { Left = 430, Top = y - 3, Width = 80, Minimum = 0, Maximum = 1, Value = (decimal)0.001, DecimalPlaces = 4, Increment = (decimal)0.0001 };
+
+        _btnRunPickBacktest = new Button { Text = "开始回测", Left = 540, Top = y - 3, Width = 100, Height = 28, BackColor = Color.LightGreen };
+        _btnRunPickBacktest.Click += BtnRunPickBacktest_Click;
+
+        _progressBarPick = new ProgressBar { Left = 660, Top = y, Width = 200, Height = 25 };
+
+        settingsPanel.Controls.AddRange(new Control[] {
+            lblStart, _dtpPickStart, lblEnd, _dtpPickEnd,
+            lblShares, _numSharesPerPick, lblCommission, _numPickCommission, lblSlippage, _numPickSlippage,
+            _btnRunPickBacktest, _progressBarPick
+        });
+
+        // 结果面板
+        var resultPanel = new Panel { Dock = DockStyle.Fill };
+
+        // 上部：结果统计
+        var statsPanel = new GroupBox { Text = "回测结果", Dock = DockStyle.Top, Height = 80 };
+        _lblPickResult = new Label { Dock = DockStyle.Fill, Padding = new Padding(10), Font = new Font("Microsoft YaHei", 10) };
+        statsPanel.Controls.Add(_lblPickResult);
+
+        // 下部：交易记录
+        var tradePanel = new GroupBox { Text = "交易记录", Dock = DockStyle.Fill };
+        _dataGridViewPick = new DataGridView { Dock = DockStyle.Fill, ReadOnly = true, AllowUserToAddRows = false };
+        _dataGridViewPick.Columns.Add("StockCode", "股票代码");
+        _dataGridViewPick.Columns.Add("StockName", "股票名称");
+        _dataGridViewPick.Columns.Add("StrategyName", "策略名称");
+        _dataGridViewPick.Columns.Add("BuyDate", "买入日期");
+        _dataGridViewPick.Columns.Add("BuyPrice", "买入价格");
+        _dataGridViewPick.Columns.Add("Shares", "数量");
+        _dataGridViewPick.Columns.Add("SellDate", "卖出日期");
+        _dataGridViewPick.Columns.Add("SellPrice", "卖出价格");
+        _dataGridViewPick.Columns.Add("ProfitLoss", "盈亏");
+        _dataGridViewPick.Columns.Add("ProfitLossPercent", "盈亏%");
+        _dataGridViewPick.Columns.Add("HoldingDays", "持仓天数");
+        tradePanel.Controls.Add(_dataGridViewPick);
+
+        // 添加控件
+        resultPanel.Controls.Add(tradePanel);  // 底部：交易记录（Fill）
+        resultPanel.Controls.Add(statsPanel);  // 上部：回测结果
+
+        parent.Controls.AddRange(new Control[] { resultPanel, settingsPanel });
     }
 
     private async void LoadStrategies()
@@ -185,6 +278,44 @@ public partial class BacktestForm : Form
         }
     }
 
+    private async void BtnRunPickBacktest_Click(object? sender, EventArgs e)
+    {
+        _btnRunPickBacktest.Enabled = false;
+        _progressBarPick.Style = ProgressBarStyle.Marquee;
+        _progressBarPick.MarqueeAnimationSpeed = 50;
+
+        try
+        {
+            var settings = new DailyPickBacktestSettings
+            {
+                StartDate = _dtpPickStart.Value,
+                EndDate = _dtpPickEnd.Value,
+                SharesPerPick = (int)_numSharesPerPick.Value,
+                Commission = _numPickCommission.Value,
+                Slippage = _numPickSlippage.Value
+            };
+
+            var progress = new Progress<string>(msg =>
+            {
+                this.Invoke(() => _lblPickResult.Text = msg);
+            });
+
+            var result = await _backtestEngine.RunDailyPickBacktestAsync(
+                _dtpPickStart.Value, _dtpPickEnd.Value, settings, progress);
+
+            DisplayPickBacktestResult(result);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"回测失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            _btnRunPickBacktest.Enabled = true;
+            _progressBarPick.Style = ProgressBarStyle.Blocks;
+        }
+    }
+
     private void DisplayResult(BacktestResult result)
     {
         // 显示统计结果
@@ -230,6 +361,38 @@ public partial class BacktestForm : Form
                 trade.SellDate?.ToString("yyyy-MM-dd"), trade.SellPrice?.ToString("F2"),
                 trade.ProfitLoss.ToString("F2"), trade.ProfitLossPercent.ToString("F2") + "%",
                 trade.HoldingDays, trade.SellReason
+            );
+        }
+    }
+
+    private void DisplayPickBacktestResult(BacktestResult result)
+    {
+        // 显示统计结果
+        _lblPickResult.Text = $"胜率: {result.WinRate:F1}%  |  " +
+                              $"总交易次数: {result.TradeCount}  |  " +
+                              $"盈利次数: {result.WinCount}  |  " +
+                              $"亏损次数: {result.LossCount}  |  " +
+                              $"总盈亏: {result.FinalEquity:F2}元  |  " +
+                              $"平均每笔盈亏: {result.FinalEquity / result.TradeCount:F2}元";
+
+        // 显示交易记录
+        _dataGridViewPick.Rows.Clear();
+        foreach (var trade in result.Trades)
+        {
+            // 从 TradeRecord 获取策略名称（需要添加 StrategyName 属性，这里先用 SellReason 暂时存储）
+            var strategyName = trade.SellReason == "每日选股回测" ? "" : trade.SellReason;
+            if (strategyName.StartsWith("策略:"))
+            {
+                strategyName = strategyName.Substring(3);
+            }
+
+            _dataGridViewPick.Rows.Add(
+                trade.StockCode, trade.StockName, strategyName,
+                trade.BuyDate.ToString("yyyy-MM-dd"), trade.BuyPrice.ToString("F2"),
+                trade.Shares,
+                trade.SellDate?.ToString("yyyy-MM-dd"), trade.SellPrice?.ToString("F2"),
+                trade.ProfitLoss.ToString("F2"), trade.ProfitLossPercent.ToString("F2") + "%",
+                trade.HoldingDays
             );
         }
     }

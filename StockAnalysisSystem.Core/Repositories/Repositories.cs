@@ -466,6 +466,16 @@ public class DailyPickRepository : IDailyPickRepository
             .ToListAsync();
     }
 
+    public async Task<List<DailyPickEntity>> GetByDateRangeAsync(DateTime startDate, DateTime endDate)
+    {
+        return await _context.DailyPicks
+            .Include(d => d.Strategy)
+            .Where(d => d.TradeDate >= startDate && d.TradeDate <= endDate)
+            .OrderBy(d => d.TradeDate)
+            .ThenByDescending(d => d.FinalScore)
+            .ToListAsync();
+    }
+
     public async Task<DailyPickEntity?> GetByDateStockStrategyAsync(DateTime date, string stockId, int strategyId)
     {
         return await _context.DailyPicks
