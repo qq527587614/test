@@ -203,23 +203,14 @@ public partial class BacktestForm : Form
             var dates = result.EquityCurve.Select(e => e.Date.ToOADate()).ToArray();
             var equities = result.EquityCurve.Select(e => (double)e.Equity).ToArray();
             
-            // 添加资金曲线（蓝色线条）
-            _equityChart.Plot.Add.Line(dates, equities, System.Drawing.Color.Blue, lineWidth: 2);
-            
-            // 添加初始资金参考线
-            var initialEquity = result.EquityCurve.First().Equity;
-            var initialDate = result.EquityCurve.First().Date.ToOADate();
-            var finalDate = result.EquityCurve.Last().Date.ToOADate();
-            _equityChart.Plot.Add.Line(new double[] { initialDate, finalDate }, 
-                new double[] { (double)initialEquity, (double)initialEquity }, 
-                System.Drawing.Color.Gray, lineWidth: 1, lineStyle: ScottPlot.LineStyle.Dash);
+            // 添加资金曲线（使用散点图）
+            var scatter = _equityChart.Plot.Add.Scatter(dates, equities);
+            scatter.Color = new ScottPlot.Color(0, 0, 255);  // 蓝色
+            scatter.LineWidth = 2;
             
             _equityChart.Plot.XLabel("日期");
             _equityChart.Plot.YLabel("资金");
             _equityChart.Plot.Title("资金曲线");
-            
-            // 设置Y轴自动范围，留出一些边距
-            _equityChart.Plot.YAxis.AutoScale();
         }
         else
         {
