@@ -44,6 +44,7 @@ public class TradeRecord
     public string StockId { get; set; } = string.Empty;
     public string StockCode { get; set; } = string.Empty;
     public string StockName { get; set; } = string.Empty;
+    public string StrategyName { get; set; } = string.Empty;  // 买入策略名称
     public DateTime BuyDate { get; set; }
     public decimal BuyPrice { get; set; }
     public int Shares { get; set; }

@@ -124,6 +124,7 @@ public partial class BacktestForm : Form
         _dataGridView = new DataGridView { Dock = DockStyle.Fill, ReadOnly = true, AllowUserToAddRows = false };
         _dataGridView.Columns.Add("StockCode", "股票代码");
         _dataGridView.Columns.Add("StockName", "股票名称");
+        _dataGridView.Columns.Add("StrategyName", "策略名称");
         _dataGridView.Columns.Add("BuyDate", "买入日期");
         _dataGridView.Columns.Add("BuyPrice", "买入价格");
         _dataGridView.Columns.Add("Shares", "数量");
@@ -355,7 +356,7 @@ public partial class BacktestForm : Form
         foreach (var trade in result.Trades)
         {
             _dataGridView.Rows.Add(
-                trade.StockCode, trade.StockName,
+                trade.StockCode, trade.StockName, trade.StrategyName,
                 trade.BuyDate.ToString("yyyy-MM-dd"), trade.BuyPrice.ToString("F2"),
                 trade.Shares,
                 trade.SellDate?.ToString("yyyy-MM-dd"), trade.SellPrice?.ToString("F2"),
@@ -379,15 +380,8 @@ public partial class BacktestForm : Form
         _dataGridViewPick.Rows.Clear();
         foreach (var trade in result.Trades)
         {
-            // 从 TradeRecord 获取策略名称（需要添加 StrategyName 属性，这里先用 SellReason 暂时存储）
-            var strategyName = trade.SellReason == "每日选股回测" ? "" : trade.SellReason;
-            if (strategyName.StartsWith("策略:"))
-            {
-                strategyName = strategyName.Substring(3);
-            }
-
             _dataGridViewPick.Rows.Add(
-                trade.StockCode, trade.StockName, strategyName,
+                trade.StockCode, trade.StockName, trade.StrategyName,
                 trade.BuyDate.ToString("yyyy-MM-dd"), trade.BuyPrice.ToString("F2"),
                 trade.Shares,
                 trade.SellDate?.ToString("yyyy-MM-dd"), trade.SellPrice?.ToString("F2"),
