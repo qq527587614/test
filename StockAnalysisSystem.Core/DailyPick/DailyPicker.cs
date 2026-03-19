@@ -390,9 +390,18 @@ public class DailyPicker
 
             results = results.OrderByDescending(r => r.FinalScore).ToList();
 
-            // 6. 保存到数据库
+            // 6. 按策略筛选，只保留每种策略评分前5的股票
+            var topResults = results
+                .GroupBy(r => r.StrategyId)
+                .SelectMany(g => g.Take(5))
+                .OrderByDescending(r => r.FinalScore)
+                .ToList();
+
+            progress?.Report($"筛选后保留 {topResults.Count} 只股票（每种策略前5）");
+
+            // 7. 保存到数据库
             progress?.Report("保存选股结果...");
-            var dailyPicks = results.Select(r => new DailyPickEntity
+            var dailyPicks = topResults.Select(r => new DailyPickEntity
             {
                 TradeDate = tradeDate,
                 StockId = r.StockId,
@@ -409,7 +418,7 @@ public class DailyPicker
             await _dailyPickRepo.DeleteByDateAsync(tradeDate);
             await _dailyPickRepo.BulkInsertAsync(dailyPicks);
 
-            progress?.Report($"选股完成，共选出 {results.Count} 只股票");
+            progress?.Report($"选股完成，共选出 {topResults.Count} 只股票");
         }
         catch (Exception ex)
         {
