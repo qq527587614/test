@@ -436,7 +436,7 @@ public class DailyPicker
             }
         }
 
-        return results;
+        return topResults;
     }
 
     /// <summary>
