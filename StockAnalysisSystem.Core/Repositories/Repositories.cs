@@ -286,6 +286,13 @@ public class StrategyRepository : IStrategyRepository
         return await _context.Strategies.FindAsync(id);
     }
 
+    public async Task<List<Strategy>> GetByIdsAsync(List<int> ids)
+    {
+        return await _context.Strategies
+            .Where(s => ids.Contains(s.Id))
+            .ToListAsync();
+    }
+
     public async Task<List<Strategy>> GetActiveAsync()
     {
         return await _context.Strategies

@@ -18,6 +18,7 @@ public class BacktestEngine
     private readonly IIndicatorRepository _indicatorRepo;
     private readonly IBacktestTaskRepository _backtestTaskRepo;
     private readonly IDailyPickRepository _dailyPickRepo;
+    private readonly IStrategyRepository _strategyRepo;
     private readonly ILogger<BacktestEngine>? _logger;
 
     public BacktestEngine(
@@ -26,6 +27,7 @@ public class BacktestEngine
         IIndicatorRepository indicatorRepo,
         IBacktestTaskRepository backtestTaskRepo,
         IDailyPickRepository dailyPickRepo,
+        IStrategyRepository strategyRepo,
         ILogger<BacktestEngine>? logger = null)
     {
         _stockRepo = stockRepo;
@@ -33,6 +35,7 @@ public class BacktestEngine
         _indicatorRepo = indicatorRepo;
         _backtestTaskRepo = backtestTaskRepo;
         _dailyPickRepo = dailyPickRepo;
+        _strategyRepo = strategyRepo;
         _logger = logger;
     }
 
@@ -477,6 +480,14 @@ public class BacktestEngine
 
             progress?.Report($"加载了 {dailyPicks.Count} 条每日选股记录");
 
+            // 获取所有涉及的策略ID
+            var strategyIds = dailyPicks.Select(p => p.StrategyId).Distinct().ToList();
+            progress?.Report($"加载 {strategyIds.Count} 个策略...");
+
+            // 加载所有策略
+            var strategies = await _strategyRepo.GetByIdsAsync(strategyIds);
+            var strategyDict = strategies.ToDictionary(s => s.Id);
+
             // 获取所有涉及的股票ID
             var stockIds = dailyPicks.Select(p => p.StockId).Distinct().ToList();
             progress?.Report($"涉及 {stockIds.Count} 只股票");
@@ -484,15 +495,24 @@ public class BacktestEngine
             // 加载所有股票的日线数据
             progress?.Report("加载日线数据...");
             var allDailyData = await _dailyDataRepo.GetByDateRangeAsync(
-                startDate.AddDays(-10),
-                endDate.AddDays(30));  // 多加载一些数据，防止数据不足
+                startDate.AddDays(-100),
+                endDate.AddDays(30));  // 多加载一些数据，确保指标计算
 
             var dailyDataByStock = allDailyData.ToLookup(d => d.StockID);
+
+            // 加载所有股票的指标数据
+            progress?.Report("加载指标数据...");
+            var allIndicators = await _indicatorRepo.GetByDateRangeAsync(
+                startDate.AddDays(-100),
+                endDate.AddDays(30));
+            var indicatorsByStock = allIndicators.ToLookup(i => i.StockId);
+
             result.TradingDays = dailyDataByStock.First().Count();
 
             progress?.Report("开始回测...");
             var trades = new List<TradeRecord>();
             var skippedCount = 0;
+            var stopLossPercent = -5m;  // 止损5%
 
             foreach (var pick in dailyPicks)
             {
@@ -511,22 +531,97 @@ public class BacktestEngine
                     var buyPrice = stockData.OpenPrice * (1 + settings.Slippage);
                     var buyDate = pick.TradeDate;
 
-                    // 查找卖出日（回测结束日或数据最后一天）
-                    var endDateForStock = Math.Min(
-                        endDate.AddDays(30).Ticks,
-                        dailyDataByStock[pick.StockId].Max(d => d.TradeDate.Ticks));
+                    // 逐日检查卖出条件
+                    string sellReason = "";
+                    decimal? finalSellPrice = null;
+                    DateTime? finalSellDate = null;
 
-                    var sellData = dailyDataByStock[pick.StockId]
-                        .FirstOrDefault(d => d.TradeDate.Ticks == endDateForStock);
+                    // 获取该股票的所有日线数据（买入日之后）
+                    var stockDailyData = dailyDataByStock[pick.StockId]
+                        .Where(d => d.TradeDate > buyDate)
+                        .OrderBy(d => d.TradeDate)
+                        .ToList();
 
-                    if (sellData == null)
+                    // 获取该股票的所有指标数据
+                    var stockIndicators = indicatorsByStock[pick.StockId]
+                        .OrderBy(d => d.TradeDate)
+                        .ToList();
+
+                    // 获取策略实例
+                    if (!strategyDict.TryGetValue(pick.StrategyId, out var strategy))
                     {
                         skippedCount++;
                         continue;
                     }
 
-                    var sellPrice = sellData.ClosePrice * (1 - settings.Slippage);
-                    var sellDate = sellData.TradeDate;
+                    var strategyInstance = Strategies.StrategyFactory.CreateFromJson(
+                        strategy.StrategyType, strategy.Parameters);
+
+                    if (strategyInstance == null)
+                    {
+                        skippedCount++;
+                        continue;
+                    }
+
+                    // 逐日检查
+                    foreach (var dayData in stockDailyData)
+                    {
+                        // 检查止损
+                        var currentPrice = dayData.ClosePrice;
+                        var currentProfitLossPercent = (currentPrice - buyPrice) / buyPrice * 100;
+
+                        if (currentProfitLossPercent <= stopLossPercent)
+                        {
+                            // 触发止损
+                            finalSellPrice = dayData.ClosePrice * (1 - settings.Slippage);
+                            finalSellDate = dayData.TradeDate;
+                            sellReason = $"止损({stopLossPercent:F1}%)";
+                            break;
+                        }
+
+                        // 检查策略卖出信号
+                        var todayIndicators = stockIndicators
+                            .Where(i => i.TradeDate.Date == dayData.TradeDate.Date)
+                            .ToList();
+
+                        if (todayIndicators.Count > 0)
+                        {
+                            var signals = strategyInstance.GenerateSignals(
+                                pick.StockId,
+                                stockDailyData.Where(d => d.TradeDate <= dayData.TradeDate).ToList(),
+                                todayIndicators);
+
+                            var sellSignal = signals.FirstOrDefault(s =>
+                                s.Type == Strategies.SignalType.Sell &&
+                                s.Date.Date == dayData.TradeDate.Date);
+
+                            if (sellSignal != null)
+                            {
+                                finalSellPrice = dayData.OpenPrice * (1 - settings.Slippage);
+                                finalSellDate = dayData.TradeDate;
+                                sellReason = $"策略卖出({strategy.Name})";
+                                break;
+                            }
+                        }
+                    }
+
+                    // 如果没有触发卖出，使用最后一个交易日收盘价卖出
+                    if (!finalSellPrice.HasValue && stockDailyData.Count > 0)
+                    {
+                        var lastData = stockDailyData.Last();
+                        finalSellPrice = lastData.ClosePrice * (1 - settings.Slippage);
+                        finalSellDate = lastData.TradeDate;
+                        sellReason = "回测结束";
+                    }
+
+                    if (!finalSellPrice.HasValue)
+                    {
+                        skippedCount++;
+                        continue;
+                    }
+
+                    var sellPrice = finalSellPrice.Value;
+                    var sellDate = finalSellDate.Value;
 
                     // 计算交易盈亏
                     var shares = settings.SharesPerPick;
@@ -552,7 +647,7 @@ public class BacktestEngine
                         ProfitLossPercent = profitLossPercent,
                         Commission = commission,
                         HoldingDays = holdingDays,
-                        SellReason = "每日选股回测"
+                        SellReason = sellReason
                     });
                 }
                 catch (Exception ex)

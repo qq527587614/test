@@ -55,6 +55,7 @@ public interface IStrategyRepository
 {
     Task<List<Strategy>> GetAllAsync();
     Task<Strategy?> GetByIdAsync(int id);
+    Task<List<Strategy>> GetByIdsAsync(List<int> ids);
     Task<List<Strategy>> GetActiveAsync();
     Task<Strategy> AddAsync(Strategy strategy);
     Task UpdateAsync(Strategy strategy);
