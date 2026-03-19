@@ -77,7 +77,7 @@ public partial class BacktestForm : Form
 
         // 结果面板
         var resultPanel = new Panel { Dock = DockStyle.Fill };
-        
+
         // 上部：结果统计
         var statsPanel = new GroupBox { Text = "回测结果", Dock = DockStyle.Top, Height = 100 };
         _lblResult = new Label { Dock = DockStyle.Fill, Padding = new Padding(10), Font = new Font("Microsoft YaHei", 10) };
@@ -104,7 +104,10 @@ public partial class BacktestForm : Form
         _dataGridView.Columns.Add("Reason", "卖出原因");
         tradePanel.Controls.Add(_dataGridView);
 
-        resultPanel.Controls.AddRange(new Control[] { tradePanel, chartPanel, statsPanel });
+        // 重要：添加顺序决定显示顺序（从下往上：Fill -> Top -> Top）
+        resultPanel.Controls.Add(tradePanel);  // 底部：交易记录（Fill）
+        resultPanel.Controls.Add(chartPanel);   // 中部：资金曲线
+        resultPanel.Controls.Add(statsPanel);  // 上部：回测结果
 
         Controls.AddRange(new Control[] { resultPanel, settingsPanel });
 
@@ -157,7 +160,13 @@ public partial class BacktestForm : Form
 
             var progress = new Progress<BacktestProgress>(p =>
             {
-                this.Invoke(() => { _lblResult.Text = p.Message; });
+                this.Invoke(() => {
+                    // 只在回测进行中显示进度消息，完成后不覆盖结果
+                    if (p.CurrentStep < p.TotalSteps)
+                    {
+                        _lblResult.Text = p.Message;
+                    }
+                });
             });
 
             var result = await _backtestEngine.RunAsync(
@@ -188,12 +197,35 @@ public partial class BacktestForm : Form
 
         // 绘制资金曲线
         _equityChart.Plot.Clear();
-        var dates = result.EquityCurve.Select(e => e.Date.ToOADate()).ToArray();
-        var equities = result.EquityCurve.Select(e => (double)e.Equity).ToArray();
-        _equityChart.Plot.Add.Scatter(dates, equities);
-        _equityChart.Plot.XLabel("日期");
-        _equityChart.Plot.YLabel("资金");
-        _equityChart.Plot.Title("资金曲线");
+        
+        if (result.EquityCurve != null && result.EquityCurve.Count > 0)
+        {
+            var dates = result.EquityCurve.Select(e => e.Date.ToOADate()).ToArray();
+            var equities = result.EquityCurve.Select(e => (double)e.Equity).ToArray();
+            
+            // 添加资金曲线（蓝色线条）
+            _equityChart.Plot.Add.Line(dates, equities, System.Drawing.Color.Blue, lineWidth: 2);
+            
+            // 添加初始资金参考线
+            var initialEquity = result.EquityCurve.First().Equity;
+            var initialDate = result.EquityCurve.First().Date.ToOADate();
+            var finalDate = result.EquityCurve.Last().Date.ToOADate();
+            _equityChart.Plot.Add.Line(new double[] { initialDate, finalDate }, 
+                new double[] { (double)initialEquity, (double)initialEquity }, 
+                System.Drawing.Color.Gray, lineWidth: 1, lineStyle: ScottPlot.LineStyle.Dash);
+            
+            _equityChart.Plot.XLabel("日期");
+            _equityChart.Plot.YLabel("资金");
+            _equityChart.Plot.Title("资金曲线");
+            
+            // 设置Y轴自动范围，留出一些边距
+            _equityChart.Plot.YAxis.AutoScale();
+        }
+        else
+        {
+            _equityChart.Plot.Title("无资金曲线数据");
+        }
+        
         _equityChart.Refresh();
 
         // 显示交易记录
