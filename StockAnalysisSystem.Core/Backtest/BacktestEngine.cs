@@ -143,7 +143,63 @@ public class BacktestEngine
                     dailySignals.AddRange(dateSignals);
                 }
 
-                // 先处理卖出信号
+                // ====== 1. 先处理止损（亏损达到设定比例时卖出）======
+                var positionsToClose = new List<(string StockId, string StockCode, string StockName, Position Position, decimal SellPrice, decimal Commission, string Reason)>();
+                
+                foreach (var kvp in portfolio.ToList())
+                {
+                    var stock = stocks.First(s => s.Id == kvp.Key);
+                    if (allDailyData.TryGetValue(kvp.Key, out var dailyData))
+                    {
+                        var todayData = dailyData.FirstOrDefault(d => d.TradeDate == date);
+                        if (todayData != null)
+                        {
+                            // 计算当前亏损比例
+                            var currentPrice = todayData.ClosePrice;
+                            var costPrice = kvp.Value.CostPrice;
+                            var profitLossPercent = (currentPrice - costPrice) / costPrice * 100;
+
+                            // 如果亏损达到止损线，卖出
+                            if (profitLossPercent <= settings.StopLossPercent)
+                            {
+                                var sellPrice = todayData.OpenPrice * (1 - settings.Slippage);
+                                var sellAmount = sellPrice * kvp.Value.Shares;
+                                var commission = sellAmount * settings.Commission;
+                                
+                                positionsToClose.Add((kvp.Key, kvp.Value.StockCode, stock.StockName, kvp.Value, sellPrice, commission, $"止损({profitLossPercent:F1}%)"));
+                            }
+                        }
+                    }
+                }
+
+                // 执行止损卖出
+                foreach (var closeInfo in positionsToClose)
+                {
+                    cash += closeInfo.SellPrice * closeInfo.Position.Shares - closeInfo.Commission;
+
+                    var trade = new TradeRecord
+                    {
+                        StockId = closeInfo.StockId,
+                        StockCode = closeInfo.StockCode,
+                        StockName = closeInfo.StockName,
+                        BuyDate = closeInfo.Position.BuyDate,
+                        BuyPrice = closeInfo.Position.CostPrice,
+                        Shares = closeInfo.Position.Shares,
+                        SellDate = date,
+                        SellPrice = closeInfo.SellPrice,
+                        Commission = closeInfo.Commission,
+                        SellReason = closeInfo.Reason,
+                        HoldingDays = (date - closeInfo.Position.BuyDate).Days
+                    };
+
+                    trade.ProfitLoss = (closeInfo.SellPrice - closeInfo.Position.CostPrice) * closeInfo.Position.Shares - closeInfo.Commission;
+                    trade.ProfitLossPercent = (closeInfo.SellPrice - closeInfo.Position.CostPrice) / closeInfo.Position.CostPrice * 100;
+
+                    trades.Add(trade);
+                    portfolio.Remove(closeInfo.StockId);
+                }
+
+                // ====== 2. 再处理策略卖出信号 ======
                 foreach (var signal in dailySignals.Where(s => s.Type == SignalType.Sell))
                 {
                     if (portfolio.TryGetValue(signal.StockId, out var position))
@@ -185,43 +241,52 @@ public class BacktestEngine
                     }
                 }
 
-                // 再处理买入信号（限制最大持仓数）
-                var buySignals = dailySignals
-                    .Where(s => s.Type == SignalType.Buy && !portfolio.ContainsKey(s.StockId))
-                    .OrderByDescending(s => s.Strength)
-                    .Take(settings.MaxPositions - portfolio.Count)
-                    .ToList();
-
-                foreach (var signal in buySignals)
+                // ====== 3. 处理买入信号 ======
+                // 每次买入使用可用资金的10%（而不是总资金的10%）
+                // 只有在有可用资金且未达到最大持仓数时才买入
+                if (cash > 0 && portfolio.Count < settings.MaxPositions)
                 {
-                    var stock = stocks.First(s => s.Id == signal.StockId);
-                    if (allDailyData.TryGetValue(signal.StockId, out var dailyData))
+                    var buySignals = dailySignals
+                        .Where(s => s.Type == SignalType.Buy && !portfolio.ContainsKey(s.StockId))
+                        .OrderByDescending(s => s.Strength)
+                        .ToList();
+
+                    foreach (var signal in buySignals)
                     {
-                        var todayData = dailyData.FirstOrDefault(d => d.TradeDate == date);
-                        if (todayData != null)
+                        // 检查是否已达到最大持仓数
+                        if (portfolio.Count >= settings.MaxPositions)
+                            break;
+
+                        var stock = stocks.First(s => s.Id == signal.StockId);
+                        if (allDailyData.TryGetValue(signal.StockId, out var dailyData))
                         {
-                            var buyPrice = todayData.OpenPrice * (1 + settings.Slippage);
-                            var positionSize = cash * settings.PositionSize;
-                            var shares = (int)(positionSize / buyPrice / 100) * 100; // 整手买入
-
-                            if (shares > 0)
+                            var todayData = dailyData.FirstOrDefault(d => d.TradeDate == date);
+                            if (todayData != null)
                             {
-                                var buyAmount = buyPrice * shares;
-                                var commission = buyAmount * settings.Commission;
-                                var totalCost = buyAmount + commission;
+                                var buyPrice = todayData.OpenPrice * (1 + settings.Slippage);
+                                // 使用可用资金的10%
+                                var positionSize = cash * settings.PositionSize;
+                                var shares = (int)(positionSize / buyPrice / 100) * 100; // 整手买入
 
-                                if (totalCost <= cash)
+                                if (shares > 0)
                                 {
-                                    cash -= totalCost;
+                                    var buyAmount = buyPrice * shares;
+                                    var commission = buyAmount * settings.Commission;
+                                    var totalCost = buyAmount + commission;
 
-                                    portfolio[signal.StockId] = new Position
+                                    if (totalCost <= cash)
                                     {
-                                        StockId = signal.StockId,
-                                        StockCode = stock.StockCode,
-                                        Shares = shares,
-                                        CostPrice = buyPrice,
-                                        BuyDate = date
-                                    };
+                                        cash -= totalCost;
+
+                                        portfolio[signal.StockId] = new Position
+                                        {
+                                            StockId = signal.StockId,
+                                            StockCode = stock.StockCode,
+                                            Shares = shares,
+                                            CostPrice = buyPrice,
+                                            BuyDate = date
+                                        };
+                                    }
                                 }
                             }
                         }

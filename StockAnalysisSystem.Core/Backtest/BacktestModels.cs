@@ -8,8 +8,9 @@ public class BacktestSettings
     public decimal InitialCapital { get; set; } = 1000000m;
     public decimal Commission { get; set; } = 0.00025m;  // 手续费率
     public decimal Slippage { get; set; } = 0.001m;      // 滑点
-    public int MaxPositions { get; set; } = 10;          // 最大持仓数
-    public decimal PositionSize { get; set; } = 0.1m;    // 单只股票仓位比例
+    public int MaxPositions { get; set; } = 10;         // 最大持仓数
+    public decimal PositionSize { get; set; } = 0.1m;   // 单只股票仓位比例（每次买入使用可用资金的10%）
+    public decimal StopLossPercent { get; set; } = -5m;  // 止损百分比（-5表示亏损5%时卖出）
 }
 
 /// <summary>
