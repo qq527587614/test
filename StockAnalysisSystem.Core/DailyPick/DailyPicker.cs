@@ -96,6 +96,7 @@ public class DailyPicker
         // 在外部定义变量，使得catch块可以访问
         int stockCount = 0;
         int strategyCount = 0;
+        List<DailyPickResult> topResults = new();
 
         // 确保数据库连接打开
         var connection = _dbContext.Database.GetDbConnection();
@@ -391,7 +392,7 @@ public class DailyPicker
             results = results.OrderByDescending(r => r.FinalScore).ToList();
 
             // 6. 按策略筛选，只保留每种策略评分前5的股票
-            var topResults = results
+            topResults = results
                 .GroupBy(r => r.StrategyId)
                 .SelectMany(g => g.Take(5))
                 .OrderByDescending(r => r.FinalScore)
