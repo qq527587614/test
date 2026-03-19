@@ -307,9 +307,7 @@ public class BacktestEngine
 
     private void CalculatePerformanceMetrics(BacktestResult result, decimal initialCapital)
     {
-        if (result.Trades.Count == 0)
-            return;
-
+        // 计算总收益率（基于最终资金）
         result.TotalReturn = (result.FinalEquity - initialCapital) / initialCapital * 100;
         
         // 年化收益率
@@ -320,18 +318,21 @@ public class BacktestEngine
             result.AnnualReturn *= 100;
         }
 
-        // 最大回撤
-        decimal peak = initialCapital;
-        decimal maxDrawdown = 0;
-        foreach (var point in result.EquityCurve)
+        // 最大回撤（基于资金曲线）
+        if (result.EquityCurve.Count > 0)
         {
-            if (point.Equity > peak)
-                peak = point.Equity;
-            var drawdown = (peak - point.Equity) / peak;
-            if (drawdown > maxDrawdown)
-                maxDrawdown = drawdown;
+            decimal peak = initialCapital;
+            decimal maxDrawdown = 0;
+            foreach (var point in result.EquityCurve)
+            {
+                if (point.Equity > peak)
+                    peak = point.Equity;
+                var drawdown = (peak - point.Equity) / peak;
+                if (drawdown > maxDrawdown)
+                    maxDrawdown = drawdown;
+            }
+            result.MaxDrawdown = maxDrawdown * 100;
         }
-        result.MaxDrawdown = maxDrawdown * 100;
 
         // 夏普比率
         if (result.EquityCurve.Count > 1)
@@ -339,33 +340,42 @@ public class BacktestEngine
             var returns = new List<decimal>();
             for (int i = 1; i < result.EquityCurve.Count; i++)
             {
-                var dailyReturn = (result.EquityCurve[i].Equity - result.EquityCurve[i - 1].Equity) 
-                    / result.EquityCurve[i - 1].Equity;
-                returns.Add(dailyReturn);
+                if (result.EquityCurve[i - 1].Equity > 0)
+                {
+                    var dailyReturn = (result.EquityCurve[i].Equity - result.EquityCurve[i - 1].Equity) 
+                        / result.EquityCurve[i - 1].Equity;
+                    returns.Add(dailyReturn);
+                }
             }
             
-            var avgReturn = returns.Average();
-            var stdDev = (decimal)Math.Sqrt(returns.Select(r => (double)((r - avgReturn) * (r - avgReturn))).Average());
-            
-            if (stdDev > 0)
-                result.SharpeRatio = avgReturn / stdDev * (decimal)Math.Sqrt(252);
+            if (returns.Count > 0)
+            {
+                var avgReturn = returns.Average();
+                var stdDev = (decimal)Math.Sqrt(returns.Select(r => (double)((r - avgReturn) * (r - avgReturn))).Average());
+                
+                if (stdDev > 0)
+                    result.SharpeRatio = avgReturn / stdDev * (decimal)Math.Sqrt(252);
+            }
         }
 
-        // 交易统计
-        result.TradeCount = result.Trades.Count;
-        result.WinCount = result.Trades.Count(t => t.ProfitLoss > 0);
-        result.LossCount = result.Trades.Count(t => t.ProfitLoss < 0);
-        result.WinRate = result.TradeCount > 0 ? (decimal)result.WinCount / result.TradeCount * 100 : 0;
+        // 交易统计（只有有交易时才计算）
+        if (result.Trades.Count > 0)
+        {
+            result.TradeCount = result.Trades.Count;
+            result.WinCount = result.Trades.Count(t => t.ProfitLoss > 0);
+            result.LossCount = result.Trades.Count(t => t.ProfitLoss < 0);
+            result.WinRate = result.TradeCount > 0 ? (decimal)result.WinCount / result.TradeCount * 100 : 0;
 
-        var profits = result.Trades.Where(t => t.ProfitLoss > 0).Select(t => t.ProfitLoss).ToList();
-        var losses = result.Trades.Where(t => t.ProfitLoss < 0).Select(t => Math.Abs(t.ProfitLoss)).ToList();
+            var profits = result.Trades.Where(t => t.ProfitLoss > 0).Select(t => t.ProfitLoss).ToList();
+            var losses = result.Trades.Where(t => t.ProfitLoss < 0).Select(t => Math.Abs(t.ProfitLoss)).ToList();
 
-        result.AverageProfit = profits.Count > 0 ? profits.Average() : 0;
-        result.AverageLoss = losses.Count > 0 ? losses.Average() : 0;
-        result.MaxProfit = profits.Count > 0 ? profits.Max() : 0;
-        result.MaxLoss = losses.Count > 0 ? losses.Max() : 0;
+            result.AverageProfit = profits.Count > 0 ? profits.Average() : 0;
+            result.AverageLoss = losses.Count > 0 ? losses.Average() : 0;
+            result.MaxProfit = profits.Count > 0 ? profits.Max() : 0;
+            result.MaxLoss = losses.Count > 0 ? losses.Max() : 0;
 
-        if (result.AverageLoss > 0)
-            result.ProfitFactor = result.AverageProfit / result.AverageLoss;
+            if (result.AverageLoss > 0)
+                result.ProfitFactor = result.AverageProfit / result.AverageLoss;
+        }
     }
 }
