@@ -1,4 +1,5 @@
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -43,7 +44,11 @@ public class TencentRealtimeService
 
         try
         {
-            var response = await _httpClient.GetStringAsync(url);
+            // 使用GetByteArrayAsync避免编码问题，腾讯API返回GBK编码
+            var bytes = await _httpClient.GetByteArrayAsync(url);
+            // 使用GBK编码解码
+            var gbkEncoding = Encoding.GetEncoding("GBK");
+            var response = gbkEncoding.GetString(bytes);
 
             // 解析返回数据
             // 格式: v_sz002131="51~利欧股份~002131~24.90~23.70~24.45~2985677~72895.58~1~..."
