@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using StockAnalysisSystem.Core.DailyPick;
 using StockAnalysisSystem.Core.Entities;
 using StockAnalysisSystem.Core.Indicators;
+using StockAnalysisSystem.Core.RealtimeData;
 using StockAnalysisSystem.Core.Repositories;
 
 namespace StockAnalysisSystem.UI.Forms;
@@ -18,6 +19,7 @@ public partial class DataManagerForm : Form
     private Label _lblIndicatorCount = null!;
     private Button _btnCalcIndicators = null!;
     private Button _btnTestDeepSeek = null!;
+    private Button _btnSyncRealtime = null!;
     private ProgressBar _progressBar = null!;
     private TextBox _txtLog = null!;
 
@@ -53,11 +55,15 @@ public partial class DataManagerForm : Form
         _btnTestDeepSeek = new Button { Text = "测试DeepSeek", Left = 540, Top = 20, Width = 120, Height = 30 };
         _btnTestDeepSeek.Click += BtnTestDeepSeek_Click;
 
-        _progressBar = new ProgressBar { Left = 400, Top = 60, Width = 260, Height = 25 };
+        _btnSyncRealtime = new Button { Text = "同步实时行情", Left = 400, Top = 55, Width = 260, Height = 30, BackColor = Color.LightGreen };
+        _btnSyncRealtime.Click += BtnSyncRealtime_Click;
+
+        _progressBar = new ProgressBar { Left = 400, Top = 85, Width = 260, Height = 25 };
 
         statsPanel.Controls.AddRange(new Control[] {
             _lblStockCount, _lblLatestDate, _lblIndicatorCount,
-            _btnCalcIndicators, _btnTestDeepSeek, _progressBar
+            _btnCalcIndicators, _btnTestDeepSeek,
+            _btnSyncRealtime, _progressBar
         });
 
         // 日志面板
@@ -170,7 +176,7 @@ public partial class DataManagerForm : Form
             };
 
             var result = await client.AnalyzeStockAsync(testStock);
-            
+
             if (!string.IsNullOrEmpty(result))
             {
                 Log($"DeepSeek响应:\n{result}");
@@ -187,6 +193,47 @@ public partial class DataManagerForm : Form
         finally
         {
             _btnTestDeepSeek.Enabled = true;
+        }
+    }
+
+    private async void BtnSyncRealtime_Click(object? sender, EventArgs e)
+    {
+        var result = MessageBox.Show(
+            "确定要同步实时行情数据吗？\n这将获取所有股票的实时数据并保存到数据库。",
+            "确认同步",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question);
+
+        if (result != DialogResult.Yes)
+            return;
+
+        _btnSyncRealtime.Enabled = false;
+        Log("开始同步实时行情...");
+
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var stockRepo = scope.ServiceProvider.GetRequiredService<IStockRepository>();
+            var dailyDataRepo = scope.ServiceProvider.GetRequiredService<IStockDailyDataRepository>();
+
+            var service = new TencentRealtimeService(stockRepo, dailyDataRepo);
+
+            var progress = new Progress<string>(msg => Log(msg));
+
+            var syncResult = await service.SyncAllStocksAsync(100, progress);
+
+            Log($"同步完成！共处理 {syncResult.TotalProcessed} 条数据");
+
+            // 刷新统计数据
+            LoadStats();
+        }
+        catch (Exception ex)
+        {
+            Log($"同步失败: {ex.Message}");
+        }
+        finally
+        {
+            _btnSyncRealtime.Enabled = true;
         }
     }
 
