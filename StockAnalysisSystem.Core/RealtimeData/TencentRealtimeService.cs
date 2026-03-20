@@ -46,44 +46,62 @@ public class TencentRealtimeService
             var response = await _httpClient.GetStringAsync(url);
 
             // 解析返回数据
-            // 格式: "sz002131"="股票名称~当前价格~昨收~今开..."
+            // 格式: v_sz002131="51~利欧股份~002131~24.90~23.70~24.45~2985677~72895.58~1~..."
             var result = new List<RealtimeStockData>();
 
-            // 使用正则解析
-            var matches = System.Text.RegularExpressions.Regex.Matches(response, "\"([^\"]+)\"=\"([^\"]+)\"");
+            // 按行分割
+            var lines = response.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
 
-            foreach (System.Text.RegularExpressions.Match match in matches)
+            foreach (var line in lines)
             {
-                var stockCode = match.Groups[1].Value;
-                var dataStr = match.Groups[2].Value;
-
-                var fields = dataStr.Split('~');
-                if (fields.Length >= 10)
+                try
                 {
-                    try
+                    // 查找等号位置
+                    var eqIndex = line.IndexOf('=');
+                    if (eqIndex < 0) continue;
+
+                    var stockCodePart = line.Substring(0, eqIndex).Trim();
+                    var dataPart = line.Substring(eqIndex + 1).Trim();
+
+                    // 去掉引号
+                    if (dataPart.StartsWith("\"") && dataPart.EndsWith("\""))
+                    {
+                        dataPart = dataPart.Substring(1, dataPart.Length - 2);
+                    }
+
+                    // 提取股票代码（去掉v_前缀）
+                    var stockCode = stockCodePart;
+                    if (stockCode.StartsWith("v_"))
+                        stockCode = stockCode.Substring(2);
+                    if (stockCode.StartsWith("s_"))
+                        stockCode = stockCode.Substring(2);
+
+                    var fields = dataPart.Split('~');
+                    if (fields.Length >= 12)
                     {
                         var data = new RealtimeStockData
                         {
-                            StockCode = stockCode,
-                            StockName = fields[0],
-                            CurrentPrice = decimal.TryParse(fields[1], out var cp) ? cp : 0,
-                            YesterdayClose = decimal.TryParse(fields[2], out var yc) ? yc : 0,
-                            OpenPrice = decimal.TryParse(fields[3], out var op) ? op : 0,
-                            Volume = decimal.TryParse(fields[4], out var vol) ? vol : 0,
-                            Amount = decimal.TryParse(fields[5], out var amt) ? amt : 0,
-                            Amplitude = decimal.TryParse(fields[6], out var amp) ? amp : 0,
-                            ChangePercent = decimal.TryParse(fields[7], out var cpct) ? cpct : 0,
-                            ChangeAmount = decimal.TryParse(fields[8], out var ca) ? ca : 0,
-                            TurnoverRate = decimal.TryParse(fields[9], out var tr) ? tr : 0,
-                            HighPrice = decimal.TryParse(fields[10], out var hp) ? hp : 0,
-                            LowPrice = decimal.TryParse(fields[11], out var lp) ? lp : 0,
+                            StockCode = stockCode,      // 如 sz002131
+                            StockName = fields[1],       // 股票名称
+                            CurrentPrice = ParseDecimal(fields[2]),    // 当前价格
+                            YesterdayClose = ParseDecimal(fields[3]),   // 昨收
+                            OpenPrice = ParseDecimal(fields[4]),        // 今开
+                            Volume = ParseDecimal(fields[5]),           // 成交量(手)
+                            Amount = ParseDecimal(fields[6]),           // 成交额(万)
+                            Amplitude = ParseDecimal(fields[7]),        // 振幅
+                            ChangePercent = ParseDecimal(fields[8]),    // 涨跌幅
+                            ChangeAmount = ParseDecimal(fields[9]),     // 涨跌额
+                            TurnoverRate = ParseDecimal(fields[10]),    // 换手率
+                            HighPrice = ParseDecimal(fields[11]),       // 最高
+                            LowPrice = fields.Length > 12 ? ParseDecimal(fields[12]) : ParseDecimal(fields[4]),  // 最低
                         };
                         result.Add(data);
                     }
-                    catch
-                    {
-                        // 跳过解析失败的记录
-                    }
+                }
+                catch (Exception ex)
+                {
+                    // 跳过解析失败的记录
+                    ErrorLogger.Log(ex, $"解析行失败: {line}");
                 }
             }
 
@@ -94,6 +112,12 @@ public class TencentRealtimeService
             ErrorLogger.Log(ex, "TencentRealtimeService.GetRealtimeData", new { StockCodes = stockCodes.Count });
             return new List<RealtimeStockData>();
         }
+    }
+
+    private decimal ParseDecimal(string value)
+    {
+        if (string.IsNullOrEmpty(value)) return 0;
+        return decimal.TryParse(value, out var result) ? result : 0;
     }
 
     /// <summary>
@@ -114,16 +138,26 @@ public class TencentRealtimeService
         if (stocks.Count == 0)
         {
             result.ErrorMessage = "没有找到股票数据";
+            progress?.Report("错误: 没有找到股票数据");
             return result;
         }
 
-        // 转换为腾讯API格式
-        var stockCodes = stocks.Select(s =>
+        progress?.Report($"获取到 {stocks.Count} 只股票");
+
+        // 构建股票代码映射（6位代码 -> 股票信息）
+        var stockMap = new Dictionary<string, StockInfo>();
+        var stockCodes = new List<string>();
+
+        foreach (var s in stocks)
         {
-            // 上海: sh + 6位代码, 深圳: sz + 6位代码
-            var code = s.StockCode.PadLeft(6, '0');
-            return s.Market?.ToLower() == "sh" ? $"sh{code}" : $"sz{code}";
-        }).ToList();
+            var code6 = s.StockCode.PadLeft(6, '0');
+            stockMap[code6] = s;
+
+            // 根据市场确定前缀
+            var market = s.Market?.ToLower() ?? "sz";
+            var prefix = market == "sh" ? "sh" : "sz";
+            stockCodes.Add($"{prefix}{code6}");
+        }
 
         var totalBatches = (int)Math.Ceiling((double)stockCodes.Count / batchSize);
         var allData = new List<StockDailyData>();
@@ -136,90 +170,106 @@ public class TencentRealtimeService
             var batchCodes = stockCodes.Skip(i * batchSize).Take(batchSize).ToList();
             progress?.Report($"正在同步第 {i + 1}/{totalBatches} 批 ({batchCodes.Count} 只股票)...");
 
-            var realtimeData = await GetRealtimeDataAsync(batchCodes);
-
-            // 转换为日线数据
-            foreach (var rd in realtimeData)
+            try
             {
-                // 查找对应的股票ID
-                var stockCode6 = rd.StockCode.Substring(2); // 去掉sh/sz前缀
-                var stock = stocks.FirstOrDefault(s => s.StockCode == stockCode6);
+                var realtimeData = await GetRealtimeDataAsync(batchCodes);
+                progress?.Report($"第 {i + 1} 批获取到 {realtimeData.Count} 条数据");
 
-                if (stock != null)
+                // 转换为日线数据
+                foreach (var rd in realtimeData)
                 {
-                    var dailyData = new StockDailyData
+                    // 从股票代码中提取6位代码（去掉sh/sz前缀）
+                    var code6 = rd.StockCode;
+                    if (code6.StartsWith("sh") || code6.StartsWith("sz"))
                     {
-                        StockID = stock.StockID,
-                        StockCode = stock.StockCode,
-                        TradeDate = today,
-                        OpenPrice = rd.OpenPrice,
-                        ClosePrice = rd.CurrentPrice,
-                        HighPrice = rd.HighPrice,
-                        LowPrice = rd.LowPrice,
-                        Volume = rd.Volume,
-                        Amount = rd.Amount,
-                        ChangePercent = rd.ChangePercent,
-                        TurnoverRate = rd.TurnoverRate,
-                        CurrentPrice = rd.CurrentPrice,
-                        BeforDate = today.AddDays(-1),
-                        CreatedTime = DateTime.Now
-                    };
-                    allData.Add(dailyData);
+                        code6 = code6.Substring(2);
+                    }
+
+                    // 查找对应的股票
+                    if (stockMap.TryGetValue(code6, out var stock))
+                    {
+                        var dailyData = new StockDailyData
+                        {
+                            StockID = stock.StockID,
+                            StockCode = stock.StockCode,
+                            TradeDate = today,
+                            OpenPrice = rd.OpenPrice,
+                            ClosePrice = rd.CurrentPrice,
+                            HighPrice = rd.HighPrice,
+                            LowPrice = rd.LowPrice,
+                            Volume = rd.Volume * 100,  // 手转换为股
+                            Amount = rd.Amount * 10000, // 万转换为元
+                            ChangePercent = rd.ChangePercent,
+                            TurnoverRate = rd.TurnoverRate,
+                            CurrentPrice = rd.CurrentPrice,
+                            BeforDate = today.AddDays(-1),
+                            CreatedTime = DateTime.Now
+                        };
+                        allData.Add(dailyData);
+                    }
                 }
+            }
+            catch (Exception ex)
+            {
+                progress?.Report($"第 {i + 1} 批同步失败: {ex.Message}");
+                ErrorLogger.Log(ex, $"同步第 {i + 1} 批失败");
             }
 
             // 每批之间稍微休息一下，避免请求过快
             if (i < totalBatches - 1)
             {
-                await Task.Delay(500);
+                await Task.Delay(300);
             }
         }
+
+        progress?.Report($"共获取到 {allData.Count} 条数据，开始保存到数据库...");
 
         // 批量保存到数据库
         if (allData.Count > 0)
         {
-            progress?.Report($"保存 {allData.Count} 条数据到数据库...");
-
-            // 先删除今日已有数据
             try
             {
-                var context = GetDailyDataContext();
-                var existingData = context.StockDailyData.Where(d => d.TradeDate == today).ToList();
+                using var context = GetDailyDataContext();
+
+                // 先删除今日已有数据
+                var existingData = context.StockDailyData
+                    .Where(d => d.TradeDate == today)
+                    .ToList();
+
                 if (existingData.Count > 0)
                 {
+                    progress?.Report($"删除今日已有数据 {existingData.Count} 条...");
                     context.StockDailyData.RemoveRange(existingData);
                     await context.SaveChangesAsync();
                 }
-            }
-            catch { }
 
-            // 批量插入
-            foreach (var batch in allData.Chunk(100))
+                // 批量插入
+                progress?.Report($"插入 {allData.Count} 条新数据...");
+                context.StockDailyData.AddRange(allData);
+                await context.SaveChangesAsync();
+
+                result.SuccessCount = allData.Count;
+                result.TotalProcessed = allData.Count;
+                progress?.Report($"保存成功！共 {allData.Count} 条数据");
+            }
+            catch (Exception ex)
             {
-                try
-                {
-                    var context = GetDailyDataContext();
-                    context.StockDailyData.AddRange(batch);
-                    await context.SaveChangesAsync();
-                    result.SuccessCount += batch.Length;
-                }
-                catch (Exception ex)
-                {
-                    result.ErrorCount += batch.Length;
-                    ErrorLogger.Log(ex, "TencentRealtimeService.SyncAllStocksAsync - SaveBatch");
-                }
+                result.ErrorCount = allData.Count;
+                result.ErrorMessage = ex.Message;
+                progress?.Report($"保存失败: {ex.Message}");
+                ErrorLogger.Log(ex, "TencentRealtimeService.SyncAllStocksAsync - SaveToDb");
             }
         }
-
-        result.TotalProcessed = allData.Count;
-        progress?.Report($"同步完成！成功 {result.SuccessCount} 条，失败 {result.ErrorCount} 条");
+        else
+        {
+            progress?.Report("没有获取到有效数据");
+        }
 
         return result;
     }
 
     private AppDbContext GetDailyDataContext()
     {
-        // 使用IDbContextFactory来创建新的DbContext
         var configuration = new ConfigurationBuilder()
             .SetBasePath(AppDomain.CurrentDomain.BaseDirectory)
             .AddJsonFile("appsettings.json")
@@ -244,7 +294,7 @@ public class RealtimeStockData
     public decimal YesterdayClose { get; set; }    // 昨收
     public decimal OpenPrice { get; set; }          // 今开
     public decimal Volume { get; set; }             // 成交量(手)
-    public decimal Amount { get; set; }            // 成交额(元)
+    public decimal Amount { get; set; }            // 成交额(万)
     public decimal Amplitude { get; set; }          // 振幅(%)
     public decimal ChangePercent { get; set; }      // 涨跌幅(%)
     public decimal ChangeAmount { get; set; }       // 涨跌额(元)
