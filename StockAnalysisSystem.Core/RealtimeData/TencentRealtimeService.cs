@@ -22,6 +22,9 @@ public class TencentRealtimeService
         IStockRepository stockRepo,
         IStockDailyDataRepository dailyDataRepo)
     {
+        // 注册GBK编码支持（.NET Core需要）
+        try { Encoding.RegisterProvider(CodePagesEncodingProvider.Instance); } catch { }
+
         _httpClient = new HttpClient();
         _httpClient.Timeout = TimeSpan.FromSeconds(30);
         _stockRepo = stockRepo;
