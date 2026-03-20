@@ -41,10 +41,8 @@ public class TencentRealtimeService
         if (stockCodes.Count == 0)
             return new List<RealtimeStockData>();
 
-        // 腾讯新API格式：s_ddsz300248,s_psz300005&_=1773994558439
-        var shCodes = stockCodes.Where(c => c.StartsWith("6") || c == "000001").Select(c => $"s_ddsz{c}").ToList();
-        var szCodes = stockCodes.Where(c => !c.StartsWith("6") && c != "000001").Select(c => $"s_psz{c}").ToList();
-        var allCodes = shCodes.Concat(szCodes).ToList();
+        // 腾讯新API格式：s_ddsz300248,s_ddsz300801（都用ddsz）
+        var allCodes = stockCodes.Select(c => $"s_ddsz{c}").ToList();
 
         if (allCodes.Count == 0)
             return new List<RealtimeStockData>();
