@@ -32,18 +32,26 @@ public class TencentRealtimeService
     }
 
     /// <summary>
-    /// 从腾讯API获取实时行情数据
+    /// 从腾讯API获取实时行情数据（使用新接口）
     /// </summary>
-    /// <param name="stockCodes">股票代码列表（如：sz002131, sh600722）</param>
+    /// <param name="stockCodes">股票代码列表（不带前缀，如：002131, 300005）</param>
     /// <returns>实时行情数据列表</returns>
     public async Task<List<RealtimeStockData>> GetRealtimeDataAsync(List<string> stockCodes)
     {
         if (stockCodes.Count == 0)
             return new List<RealtimeStockData>();
 
-        // 腾讯API格式：s_sz002131,s_sz300310,...
-        var codesParam = string.Join(",", stockCodes.Select(c => $"s_{c}"));
-        var url = $"https://qt.gtimg.cn/?q={codesParam}";
+        // 腾讯新API格式：s_ddsz300248,s_psz300005&_=1773994558439
+        var shCodes = stockCodes.Where(c => c.StartsWith("6") || c == "000001").Select(c => $"s_ddsz{c}").ToList();
+        var szCodes = stockCodes.Where(c => !c.StartsWith("6") && c != "000001").Select(c => $"s_psz{c}").ToList();
+        var allCodes = shCodes.Concat(szCodes).ToList();
+
+        if (allCodes.Count == 0)
+            return new List<RealtimeStockData>();
+
+        var timestamp = DateTimeOffset.Now.ToUnixTimeSeconds();
+        var codesParam = string.Join(",", allCodes);
+        var url = $"https://qt.gtimg.cn/?q={codesParam}&_={timestamp}";
 
         try
         {
@@ -77,19 +85,23 @@ public class TencentRealtimeService
                         dataPart = dataPart.Substring(1, dataPart.Length - 2);
                     }
 
-                    // 提取股票代码（去掉v_前缀）
+                    // 提取股票代码（去掉s_ddsz/s_psz/v_前缀，只保留6位数字）
                     var stockCode = stockCodePart;
-                    if (stockCode.StartsWith("v_"))
-                        stockCode = stockCode.Substring(2);
-                    if (stockCode.StartsWith("s_"))
-                        stockCode = stockCode.Substring(2);
+                    if (stockCode.StartsWith("v_sz002") || stockCode.StartsWith("v_sz300"))
+                    {
+                        stockCode = stockCode.Substring(5);
+                    }
+                    else if (stockCode.StartsWith("s_ddsz") || stockCode.StartsWith("s_psz"))
+                    {
+                        stockCode = stockCode.Substring(5);
+                    }
 
                     var fields = dataPart.Split('~');
-                    if (fields.Length >= 12)
+                    if (fields.Length >= 13)
                     {
                         var data = new RealtimeStockData
                         {
-                            StockCode = stockCode,      // 如 sz002131
+                            StockCode = stockCode,      // 如 002131
                             StockName = fields[1],       // 股票名称
                             CurrentPrice = ParseDecimal(fields[2]),    // 当前价格
                             YesterdayClose = ParseDecimal(fields[3]),   // 昨收
@@ -101,7 +113,12 @@ public class TencentRealtimeService
                             ChangeAmount = ParseDecimal(fields[9]),     // 涨跌额
                             TurnoverRate = ParseDecimal(fields[10]),    // 换手率
                             HighPrice = ParseDecimal(fields[11]),       // 最高
-                            LowPrice = fields.Length > 12 ? ParseDecimal(fields[12]) : ParseDecimal(fields[4]),  // 最低
+                            LowPrice = ParseDecimal(fields[12]),       // 最低
+                            Buy1 = fields.Length > 13 ? ParseDecimal(fields[13]) : 0,      // 买一价
+                            Buy2 = fields.Length > 14 ? ParseDecimal(fields[14]) : 0,      // 买二价
+                            Buy3 = fields.Length > 15 ? ParseDecimal(fields[15]) : 0,      // 买三价
+                            Buy4 = fields.Length > 16 ? ParseDecimal(fields[16]) : 0,       // 买四价
+                            Buy5 = fields.Length > 17 ? ParseDecimal(fields[17]) : 0,       // 买五价
                         };
                         result.Add(data);
                     }
@@ -117,7 +134,7 @@ public class TencentRealtimeService
         }
         catch (Exception ex)
         {
-            ErrorLogger.Log(ex, "TencentRealtimeService.GetRealtimeData", new { StockCodes = stockCodes.Count });
+            ErrorLogger.Log(ex, "TencentRealtimeService.GetRealtimeData", new { StockCodes = stockCodes.Count, Url = url });
             return new List<RealtimeStockData>();
         }
     }
@@ -309,6 +326,11 @@ public class RealtimeStockData
     public decimal TurnoverRate { get; set; }      // 换手率(%)
     public decimal HighPrice { get; set; }          // 最高
     public decimal LowPrice { get; set; }          // 最低
+    public decimal Buy1 { get; set; }               // 买一价
+    public decimal Buy2 { get; set; }               // 买二价
+    public decimal Buy3 { get; set; }               // 买三价
+    public decimal Buy4 { get; set; }               // 买四价
+    public decimal Buy5 { get; set; }               // 买五价
 }
 
 /// <summary>
