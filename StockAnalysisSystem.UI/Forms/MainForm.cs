@@ -65,6 +65,11 @@ public partial class MainForm : Form
         pickMenu.DropDownItems.Add("选股历史(&H)", null, ShowDailyPickForm);
         menuStrip.Items.Add(pickMenu);
 
+        // 自选股菜单
+        var favoriteMenu = new ToolStripMenuItem("自选股(&F)");
+        favoriteMenu.DropDownItems.Add("我的自选(&M)", null, ShowFavoriteForm);
+        menuStrip.Items.Add(favoriteMenu);
+
         // 数据菜单
         var dataMenu = new ToolStripMenuItem("数据(&D)");
         dataMenu.DropDownItems.Add("数据管理(&M)", null, ShowDataManagerForm);
@@ -133,6 +138,12 @@ public partial class MainForm : Form
     private void ShowDataManagerForm(object? sender, EventArgs e)
     {
         var form = _serviceProvider.GetRequiredService<DataManagerForm>();
+        ShowInMainPanel(form);
+    }
+
+    private void ShowFavoriteForm(object? sender, EventArgs e)
+    {
+        var form = _serviceProvider.GetRequiredService<FavoriteForm>();
         ShowInMainPanel(form);
     }
 

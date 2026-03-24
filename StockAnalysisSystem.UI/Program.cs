@@ -56,6 +56,7 @@ static class Program
             services.AddTransient<OptimizationForm>();
             services.AddTransient<DailyPickForm>();
             services.AddTransient<DataManagerForm>();
+            services.AddTransient<FavoriteForm>();
 
             // 构建服务提供者
             var serviceProvider = services.BuildServiceProvider();

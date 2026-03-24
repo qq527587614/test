@@ -532,3 +532,51 @@ public class DeepSeekLogRepository : IDeepSeekLogRepository
             .ToListAsync();
     }
 }
+
+/// <summary>
+/// 自选股仓储实现
+/// </summary>
+public class StockFavoriteRepository : IStockFavoriteRepository
+{
+    private readonly AppDbContext _context;
+
+    public StockFavoriteRepository(AppDbContext context)
+    {
+        _context = context;
+    }
+
+    public async Task<List<StockFavorite>> GetAllAsync()
+    {
+        return await _context.StockFavorites
+            .OrderByDescending(f => f.AddedDate)
+            .ToListAsync();
+    }
+
+    public async Task<StockFavorite?> GetByStockCodeAsync(string stockCode)
+    {
+        return await _context.StockFavorites
+            .FirstOrDefaultAsync(f => f.StockCode == stockCode);
+    }
+
+    public async Task<StockFavorite> AddAsync(StockFavorite favorite)
+    {
+        _context.StockFavorites.Add(favorite);
+        await _context.SaveChangesAsync();
+        return favorite;
+    }
+
+    public async Task DeleteAsync(string stockCode)
+    {
+        var favorite = await GetByStockCodeAsync(stockCode);
+        if (favorite != null)
+        {
+            _context.StockFavorites.Remove(favorite);
+            await _context.SaveChangesAsync();
+        }
+    }
+
+    public async Task<bool> ExistsAsync(string stockCode)
+    {
+        return await _context.StockFavorites.AnyAsync(f => f.StockCode == stockCode);
+    }
+}

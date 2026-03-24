@@ -3,6 +3,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using StockAnalysisSystem.Core.Common;
 using StockAnalysisSystem.Core.Repositories;
+using StockAnalysisSystem.Core.RealtimeData;
+using StockAnalysisSystem.Core.Services;
 
 namespace StockAnalysisSystem.Core;
 
@@ -49,6 +51,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IOptimizationTaskRepository, OptimizationTaskRepository>();
         services.AddScoped<IDailyPickRepository, DailyPickRepository>();
         services.AddScoped<IDeepSeekLogRepository, DeepSeekLogRepository>();
+        services.AddScoped<IStockFavoriteRepository, StockFavoriteRepository>();
 
         // 注册服务
         services.AddScoped<Indicators.IndicatorCalculator>();
@@ -57,6 +60,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Optimization.ParameterOptimizer>();
         services.AddScoped<DailyPick.DailyPicker>();
         services.AddScoped<DeepSeek.DeepSeekClient>();
+        services.AddScoped<TencentRealtimeService>();
+        services.AddScoped<StockFavoriteService>();
 
         return services;
     }

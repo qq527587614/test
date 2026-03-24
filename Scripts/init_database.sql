@@ -101,3 +101,13 @@ INSERT INTO `Strategy` (`Name`, `Description`, `StrategyType`, `Parameters`, `Is
 ('均线交叉策略-5日20日', '短期均线上穿长期均线买入，下穿卖出', 'MovingAverageCross', '{"ShortPeriod": 5, "LongPeriod": 20}', 1),
 ('MACD金叉死叉策略', 'MACD金叉买入，死叉卖出', 'MACDCross', '{"FastPeriod": 12, "SlowPeriod": 26, "SignalPeriod": 9}', 1),
 ('RSI超卖策略', 'RSI低于30买入，高于70卖出', 'RSIOverSold', '{"Period": 6, "OversoldThreshold": 30, "OverboughtThreshold": 70}', 1);
+
+-- 7. 自选股表
+CREATE TABLE IF NOT EXISTS `stockfavorite` (
+  `Id` int NOT NULL AUTO_INCREMENT,
+  `StockCode` varchar(30) NOT NULL COMMENT '股票代码',
+  `AddedDate` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '添加日期',
+  `Remark` varchar(200) DEFAULT NULL COMMENT '备注',
+  PRIMARY KEY (`Id`),
+  UNIQUE KEY `uk_stockcode` (`StockCode`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='自选股表';

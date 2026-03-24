@@ -25,6 +25,7 @@ public class AppDbContext : DbContext
     public DbSet<DailyPickEntity> DailyPicks { get; set; }
     public DbSet<DeepSeekLog> DeepSeekLogs { get; set; }
     public DbSet<StockDailyIndicator> StockDailyIndicators { get; set; }
+    public DbSet<StockFavorite> StockFavorites { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -75,6 +76,12 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<BacktestTask>(entity =>
         {
             entity.HasIndex(e => e.StrategyId).HasDatabaseName("idx_strategy");
+        });
+
+        // StockFavorite 配置
+        modelBuilder.Entity<StockFavorite>(entity =>
+        {
+            entity.HasIndex(e => e.StockCode).IsUnique().HasDatabaseName("uk_stockcode");
         });
     }
 }

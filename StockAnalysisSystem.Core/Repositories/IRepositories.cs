@@ -108,3 +108,15 @@ public interface IDeepSeekLogRepository
     Task<DeepSeekLog> AddAsync(DeepSeekLog log);
     Task<List<DeepSeekLog>> GetRecentAsync(int count = 100);
 }
+
+/// <summary>
+/// 自选股仓储接口
+/// </summary>
+public interface IStockFavoriteRepository
+{
+    Task<List<StockFavorite>> GetAllAsync();
+    Task<StockFavorite?> GetByStockCodeAsync(string stockCode);
+    Task<StockFavorite> AddAsync(StockFavorite favorite);
+    Task DeleteAsync(string stockCode);
+    Task<bool> ExistsAsync(string stockCode);
+}

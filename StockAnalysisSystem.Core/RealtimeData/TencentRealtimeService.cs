@@ -94,19 +94,19 @@ public class TencentRealtimeService
                     {
                         var data = new RealtimeStockData
                         {
-                            StockCode = stockCode,      // 如 002131
+                            StockCode = fields[2],      // 如 002131
                             StockName = fields[1],       // 股票名称
-                            CurrentPrice = ParseDecimal(fields[2]),    // 当前价格
-                            YesterdayClose = ParseDecimal(fields[3]),   // 昨收
-                            OpenPrice = ParseDecimal(fields[4]),        // 今开
-                            Volume = ParseDecimal(fields[5]),           // 成交量(手)
-                            Amount = ParseDecimal(fields[6]),           // 成交额(万)
-                            Amplitude = ParseDecimal(fields[7]),        // 振幅
-                            ChangePercent = ParseDecimal(fields[8]),    // 涨跌幅
-                            ChangeAmount = ParseDecimal(fields[9]),     // 涨跌额
-                            TurnoverRate = ParseDecimal(fields[10]),    // 换手率
-                            HighPrice = ParseDecimal(fields[11]),       // 最高
-                            LowPrice = ParseDecimal(fields[12]),       // 最低
+                            CurrentPrice = ParseDecimal(fields[3]),    // 当前价格
+                            YesterdayClose = ParseDecimal(fields[4]),   // 昨收
+                            OpenPrice = ParseDecimal(fields[5]),        // 今开
+                            Volume = ParseDecimal(fields[6]),           // 成交量(手)
+                            Amount = ParseDecimal(fields[37]),           // 成交额(万)
+                            Amplitude = ParseDecimal(fields[43]),        // 振幅
+                            ChangePercent = ParseDecimal(fields[32]),    // 涨跌幅
+                            ChangeAmount = ParseDecimal(fields[31]),     // 涨跌额
+                            TurnoverRate = ParseDecimal(fields[38]),    // 换手率
+                            HighPrice = ParseDecimal(fields[33]),       // 最高
+                            LowPrice = ParseDecimal(fields[34]),       // 最低
                             Buy1 = fields.Length > 13 ? ParseDecimal(fields[13]) : 0,      // 买一价
                             Buy2 = fields.Length > 14 ? ParseDecimal(fields[14]) : 0,      // 买二价
                             Buy3 = fields.Length > 15 ? ParseDecimal(fields[15]) : 0,      // 买三价
@@ -163,17 +163,29 @@ public class TencentRealtimeService
         progress?.Report($"获取到 {stocks.Count} 只股票");
 
         // 构建股票代码映射（6位代码 -> 股票信息）
+        // 支持多种格式的key：纯6位数字、带sz/sh前缀
         var stockMap = new Dictionary<string, StockInfo>();
         var stockCodes = new List<string>();
 
         foreach (var s in stocks)
         {
-            var code6 = s.StockCode.PadLeft(6, '0');
-            stockMap[code6] = s;
+            // 提取纯6位数字代码
+            var rawCode = s.StockCode ?? "";
+            var code6 = rawCode.Replace("sz", "").Replace("sh", "").PadLeft(6, '0');
 
-            // 根据市场确定前缀
-            var market = s.Market?.ToLower() ?? "sz";
-            var prefix = market == "sh" ? "sh" : "sz";
+            // 根据前两位数字判断市场
+            // 00/30开头 -> 深圳(sz)，60/68开头 -> 上海(sh)
+            var prefix = "sz";
+            if (code6.StartsWith("60") || code6.StartsWith("68"))
+            {
+                prefix = "sh";
+            }
+
+            // 存储到map，支持多种格式查找
+            stockMap[code6] = s;  // 纯数字格式：002131
+            stockMap[$"sz{code6}"] = s;  // 深圳格式
+            stockMap[$"sh{code6}"] = s;  // 上海格式
+
             stockCodes.Add($"{prefix}{code6}");
         }
 
@@ -196,15 +208,27 @@ public class TencentRealtimeService
                 // 转换为日线数据
                 foreach (var rd in realtimeData)
                 {
-                    // 从股票代码中提取6位代码（去掉sh/sz前缀）
-                    var code6 = rd.StockCode;
-                    if (code6.StartsWith("sh") || code6.StartsWith("sz"))
+                    // 尝试多种格式查找股票
+                    StockInfo? stock = null;
+                    var rawCode = rd.StockCode ?? "";
+
+                    // 尝试直接查找
+                    if (!stockMap.TryGetValue(rawCode, out stock))
                     {
-                        code6 = code6.Substring(2);
+                        // 去掉前缀后查找
+                        var code6 = rawCode.Replace("sz", "").Replace("sh", "");
+                        if (!stockMap.TryGetValue(code6, out stock))
+                        {
+                            // 尝试带sz前缀查找
+                            if (!stockMap.TryGetValue($"sz{code6}", out stock))
+                            {
+                                // 尝试带sh前缀查找
+                                stockMap.TryGetValue($"sh{code6}", out stock);
+                            }
+                        }
                     }
 
-                    // 查找对应的股票
-                    if (stockMap.TryGetValue(code6, out var stock))
+                    if (stock != null)
                     {
                         var dailyData = new StockDailyData
                         {
@@ -215,8 +239,8 @@ public class TencentRealtimeService
                             ClosePrice = rd.CurrentPrice,
                             HighPrice = rd.HighPrice,
                             LowPrice = rd.LowPrice,
-                            Volume = rd.Volume * 100,  // 手转换为股
-                            Amount = rd.Amount * 10000, // 万转换为元
+                            Volume = rd.Volume,  // 手转换为股
+                            Amount = rd.Amount, // 万转换为元
                             ChangePercent = rd.ChangePercent,
                             TurnoverRate = rd.TurnoverRate,
                             CurrentPrice = rd.CurrentPrice,
