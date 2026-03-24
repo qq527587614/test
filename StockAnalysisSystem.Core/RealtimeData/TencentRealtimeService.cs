@@ -42,17 +42,8 @@ public class TencentRealtimeService
             return new List<RealtimeStockData>();
 
         // 腾讯接口格式：q=sz002229,sz300166,sh600722
-        var codesWithPrefix = stockCodes.Select(c =>
-        {
-            var code = c.PadLeft(6, '0');
-            // 上海用sh前缀，深圳用sz前缀
-            if (code.StartsWith("6") || code == "000001")
-                return $"sh{code}";
-            else
-                return $"sz{code}";
-        }).ToList();
-
-        var codesParam = string.Join(",", codesWithPrefix);
+        // 股票代码已经带前缀（sz/sh），直接使用
+        var codesParam = string.Join(",", stockCodes);
         var url = $"https://qt.gtimg.cn/q={codesParam}";
 
         try
