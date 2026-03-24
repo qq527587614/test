@@ -198,6 +198,19 @@ public class SinaMinuteChartService
                                     data.Hour = hour;
                                 if (int.TryParse(timeParts[1], out var minute))
                                     data.Minute = minute;
+
+                                // 计算从9:30开始的分钟数（11:30和13:00合并）
+                                // 9:30 = 570分钟, 11:30 = 690分钟, 13:00 = 780分钟
+                                int timeInMinutes = hour * 60 + minute;
+                                if (timeInMinutes < 780) // 上午 (9:30-11:30)
+                                {
+                                    data.MinutesFromStart = timeInMinutes - 570;
+                                }
+                                else // 下午 (13:00-15:00)
+                                {
+                                    // 下午时间 = 120(上午) + (当前分钟 - 780)，合并午休
+                                    data.MinutesFromStart = 120 + (timeInMinutes - 780);
+                                }
                             }
                         }
 
@@ -248,6 +261,9 @@ public class MinuteChartData
     public decimal Close { get; set; }          // 收盘价（当前价）
     public decimal Volume { get; set; }          // 成交量
     public decimal AvgPrice { get; set; }       // 均价（累计平均）
+
+    // 从9:30开始的分钟数（11:30和13:00合并到同一位置）
+    public int MinutesFromStart { get; set; }
 
     // 计算属性
     public decimal Change => Open > 0 ? Close - Open : 0;

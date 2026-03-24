@@ -259,7 +259,7 @@ public partial class MinuteChartForm : Form
 
             for (int i = 0; i < _minuteData.Count; i++)
             {
-                var x = chartRect.Left + (float)i / (_minuteData.Count - 1) * chartRect.Width;
+                var x = chartRect.Left + (float)_minuteData[i].MinutesFromStart / 240 * chartRect.Width;
                 var y = chartRect.Bottom - (float)((_minuteData[i].Close - minPrice) / (maxPrice - minPrice)) * chartRect.Height;
                 points.Add(new PointF(x, y));
                 fillPoints.Add(new PointF(x, y));
@@ -279,12 +279,12 @@ public partial class MinuteChartForm : Form
                 g.DrawLines(linePen, points.ToArray());
             }
 
-            // 绘制均价线（黄色）
+            // 绘制整日均价线（黄色）
             using var avgPen = new Pen(Color.Yellow, 2) { DashStyle = DashStyle.Dash };
             var avgPoints = new List<PointF>();
             for (int i = 0; i < _minuteData.Count; i++)
             {
-                var x = chartRect.Left + (float)i / (_minuteData.Count - 1) * chartRect.Width;
+                var x = chartRect.Left + (float)_minuteData[i].MinutesFromStart / 240 * chartRect.Width;
                 var avgY = chartRect.Bottom - (float)((_minuteData[i].AvgPrice - minPrice) / (maxPrice - minPrice)) * chartRect.Height;
                 avgPoints.Add(new PointF(x, avgY));
             }
@@ -336,7 +336,7 @@ public partial class MinuteChartForm : Form
             // 绘制量能柱状图
             for (int i = 0; i < _minuteData.Count; i++)
             {
-                var x = volumeRect.Left + (float)i / (_minuteData.Count - 1) * volumeRect.Width;
+                var x = volumeRect.Left + (float)_minuteData[i].MinutesFromStart / 240 * volumeRect.Width;
                 var barWidth = Math.Max(2, volumeRect.Width / _minuteData.Count - 1);
                 var volumeHeight = (float)(_minuteData[i].Volume / maxVolume) * volumeRect.Height;
                 var y = volumeRect.Bottom - volumeHeight;
@@ -364,12 +364,12 @@ public partial class MinuteChartForm : Form
         using var timePen = new Pen(Color.FromArgb(150, 255, 255, 255), 1);
         using var timeBrush = new SolidBrush(Color.White);
 
-        // 固定时间点：9:30, 10:00, 10:30, 11:00, 11:30, 13:00, 13:30, 14:00, 14:30, 15:00
-        var fixedTimes = new[] { 930, 1000, 1030, 1100, 1130, 1300, 1330, 1400, 1430, 1500 };
-        var timeLabels = new[] { "09:30", "10:00", "10:30", "11:00", "11:30", "13:00", "13:30", "14:00", "14:30", "15:00" };
+        // 固定时间点：9:30, 10:00, 10:30, 11:00, 13:00, 13:30, 14:00, 14:30, 15:00 (11:30和13:00合并)
+        var fixedTimes = new[] { 930, 1000, 1030, 1100, 1300, 1330, 1400, 1430, 1500 };
+        var timeLabels = new[] { "09:30", "10:00", "10:30", "11:00", "13:00", "13:30", "14:00", "14:30", "15:00" };
 
-        // 交易时段总分钟数 = 上午120分钟 + 午休间隔30分钟 + 下午120分钟 = 270分钟
-        const int totalTradingMinutes = 270;
+        // 交易时段总分钟数 = 上午120分钟 + 下午120分钟 = 240分钟
+        const int totalTradingMinutes = 240;
 
         for (int i = 0; i < fixedTimes.Length; i++)
         {
@@ -383,17 +383,16 @@ public partial class MinuteChartForm : Form
             if (time < 1300)
             {
                 // 上午时段 (9:30 - 11:30)
-                // 9:30 = 570分钟, 11:30 = 690分钟
                 minutesFromStart = timeInMinutes - 570;
             }
             else
             {
                 // 下午时段 (13:00 - 15:00)
-                // 下午时间需要加上上午的120分钟，还要加上30分钟的"午休间隔"
-                // 13:00 -> 120 + 0 + 30 = 150 (比11:30多30分钟的位置)
-                // 13:30 -> 120 + 30 + 30 = 180
-                // 15:00 -> 120 + 120 + 30 = 270
-                minutesFromStart = 120 + (timeInMinutes - 780) + 30;
+                // 下午时间 = 120(上午) + (当前分钟 - 780)，合并午休
+                // 13:00 -> 120 + 0 = 120 (与11:30位置相同，合并)
+                // 13:30 -> 120 + 30 = 150
+                // 15:00 -> 120 + 120 = 240
+                minutesFromStart = 120 + (timeInMinutes - 780);
             }
 
             // 计算x坐标
@@ -411,7 +410,7 @@ public partial class MinuteChartForm : Form
 
         // 绘制最新价格
         var latestData = _minuteData.Last();
-        var lastX = chartRect.Right;
+        var lastX = chartRect.Left + (float)latestData.MinutesFromStart / 240 * chartRect.Width;
         var lastY = chartRect.Bottom - (float)((latestData.Close - minPrice) / (maxPrice - minPrice)) * chartRect.Height;
 
         // 最新价圆点
