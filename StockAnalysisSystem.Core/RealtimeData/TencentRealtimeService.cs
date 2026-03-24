@@ -32,24 +32,28 @@ public class TencentRealtimeService
     }
 
     /// <summary>
-    /// 从腾讯API获取实时行情数据（使用新接口）
+    /// 从腾讯API获取实时行情数据
     /// </summary>
-    /// <param name="stockCodes">股票代码列表（不带前缀，如：002131, 300005）</param>
+    /// <param name="stockCodes">股票代码列表（6位数字，如：002131, 300005, 600722）</param>
     /// <returns>实时行情数据列表</returns>
     public async Task<List<RealtimeStockData>> GetRealtimeDataAsync(List<string> stockCodes)
     {
         if (stockCodes.Count == 0)
             return new List<RealtimeStockData>();
 
-        // 腾讯新API格式：s_ddsz300248,s_ddsz300801（都用ddsz）
-        var allCodes = stockCodes.Select(c => $"s_ddsz{c}").ToList();
+        // 腾讯接口格式：q=sz002229,sz300166,sh600722
+        var codesWithPrefix = stockCodes.Select(c =>
+        {
+            var code = c.PadLeft(6, '0');
+            // 上海用sh前缀，深圳用sz前缀
+            if (code.StartsWith("6") || code == "000001")
+                return $"sh{code}";
+            else
+                return $"sz{code}";
+        }).ToList();
 
-        if (allCodes.Count == 0)
-            return new List<RealtimeStockData>();
-
-        var timestamp = DateTimeOffset.Now.ToUnixTimeSeconds();
-        var codesParam = string.Join(",", allCodes);
-        var url = $"https://qt.gtimg.cn/?q={codesParam}&_={timestamp}";
+        var codesParam = string.Join(",", codesWithPrefix);
+        var url = $"https://qt.gtimg.cn/q={codesParam}";
 
         try
         {
@@ -83,15 +87,15 @@ public class TencentRealtimeService
                         dataPart = dataPart.Substring(1, dataPart.Length - 2);
                     }
 
-                    // 提取股票代码（去掉s_ddsz/s_psz/v_前缀，只保留6位数字）
+                    // 提取股票代码（去掉v_前缀，如 v_sz002131 -> 002131）
                     var stockCode = stockCodePart;
-                    if (stockCode.StartsWith("v_sz002") || stockCode.StartsWith("v_sz300"))
+                    if (stockCode.StartsWith("v_sz") || stockCode.StartsWith("v_sh"))
                     {
-                        stockCode = stockCode.Substring(5);
+                        stockCode = stockCode.Substring(3);
                     }
-                    else if (stockCode.StartsWith("s_ddsz") || stockCode.StartsWith("s_psz"))
+                    else if (stockCode.StartsWith("sz") || stockCode.StartsWith("sh"))
                     {
-                        stockCode = stockCode.Substring(5);
+                        stockCode = stockCode.Substring(2);
                     }
 
                     var fields = dataPart.Split('~');
