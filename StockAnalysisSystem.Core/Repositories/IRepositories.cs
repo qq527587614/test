@@ -98,6 +98,7 @@ public interface IDailyPickRepository
     Task<DailyPickEntity?> GetByDateStockStrategyAsync(DateTime date, string stockId, int strategyId);
     Task BulkInsertAsync(List<DailyPickEntity> picks);
     Task DeleteByDateAsync(DateTime date);
+    Task ReplaceByDateAsync(DateTime date, List<DailyPickEntity> newPicks);
 }
 
 /// <summary>

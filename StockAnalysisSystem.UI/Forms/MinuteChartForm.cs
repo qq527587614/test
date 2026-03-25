@@ -21,12 +21,16 @@ public partial class MinuteChartForm : Form
 
     private List<MinuteChartData> _minuteData = new();
     private decimal _yesterdayClose = 0;  // 昨收价，用于计算涨跌
+    private decimal _dayChangePercent = 0;  // 当日涨跌幅（来自实时数据）
 
     public MinuteChartForm(string stockCode, string stockName, decimal currentPrice, decimal changePercent)
     {
         _chartService = new SinaMinuteChartService();
         _stockCode = NormalizeCode(stockCode);
         _stockName = stockName;
+
+        // 保存当日涨跌幅（来自实时数据）
+        _dayChangePercent = changePercent;
 
         // 根据代码判断市场
         _market = _stockCode.StartsWith("60") || _stockCode.StartsWith("68") ? "SH" : "SZ";
@@ -53,7 +57,7 @@ public partial class MinuteChartForm : Form
         StartPosition = FormStartPosition.CenterParent;
 
         // 标题栏
-        var topPanel = new Panel { Dock = DockStyle.Top, Height = 80, Padding = new Padding(10) };
+        var topPanel = new Panel { Dock = DockStyle.Top, Height = 85, Padding = new Padding(10) };
 
         _lblTitle = new Label
         {
@@ -61,7 +65,7 @@ public partial class MinuteChartForm : Form
             Font = new Font("微软雅黑", 14, FontStyle.Bold),
             Left = 10,
             Top = 10,
-            Width = 300
+            AutoSize = true
         };
 
         _lblPrice = new Label
@@ -69,25 +73,25 @@ public partial class MinuteChartForm : Form
             Text = "当前价: --",
             Font = new Font("微软雅黑", 12),
             Left = 10,
-            Top = 40,
-            Width = 200
+            Top = 45,
+            AutoSize = true
         };
 
         _lblChange = new Label
         {
             Text = "涨跌幅: --",
             Font = new Font("微软雅黑", 12),
-            Left = 220,
-            Top = 40,
-            Width = 200
+            Left = 180,
+            Top = 45,
+            AutoSize = true
         };
 
         // 切换周期
-        var lblScale = new Label { Text = "周期:", Left = 450, Top = 42, Width = 40 };
+        var lblScale = new Label { Text = "周期:", Left = 450, Top = 48, Width = 40 };
         _cbScale = new ComboBox
         {
             Left = 490,
-            Top = 38,
+            Top = 44,
             Width = 80,
             DropDownStyle = ComboBoxStyle.DropDownList
         };
@@ -95,14 +99,14 @@ public partial class MinuteChartForm : Form
         _cbScale.SelectedIndex = 0;
         _cbScale.SelectedIndexChanged += CbScale_SelectedIndexChanged;
 
-        _btnRefresh = new Button { Text = "刷新", Left = 580, Top = 36, Width = 60, Height = 26 };
+        _btnRefresh = new Button { Text = "刷新", Left = 580, Top = 42, Width = 60, Height = 26 };
         _btnRefresh.Click += (s, e) => LoadDataAsync();
 
         _lblStatus = new Label
         {
             Text = "加载中...",
             Left = 650,
-            Top = 42,
+            Top = 48,
             Width = 200,
             ForeColor = Color.Gray
         };
@@ -182,13 +186,14 @@ public partial class MinuteChartForm : Form
             _minuteData = data;
 
             // 更新价格显示
+            // 使用当日总体涨跌幅（来自实时数据），而不是分时图的最后一个数据点
             var latest = _minuteData.Last();
+            var changePercent = _dayChangePercent;
             var change = _yesterdayClose > 0 ? latest.Close - _yesterdayClose : latest.Change;
-            var changePercent = _yesterdayClose > 0 ? (change / _yesterdayClose) * 100 : latest.ChangePercent;
 
             _lblPrice.Text = $"当前价: {latest.Close:F2}";
-            _lblChange.Text = $"涨跌幅: {change:+0.00;-0.00}%";
-            _lblChange.ForeColor = change >= 0 ? Color.Red : Color.Lime;
+            _lblChange.Text = $"涨跌幅: {changePercent:+0.00;-0.00}%";
+            _lblChange.ForeColor = changePercent >= 0 ? Color.Red : Color.Lime;
 
             _lblStatus.Text = $"共 {_minuteData.Count} 条数据";
             _chartPanel.Invalidate();

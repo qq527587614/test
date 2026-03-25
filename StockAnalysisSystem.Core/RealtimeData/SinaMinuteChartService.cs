@@ -33,6 +33,13 @@ public class SinaMinuteChartService
             dataLen = CalculateTodayDataCount();
         }
 
+        // 如果计算出的dataLen <= 0，说明当前不是交易时段，没有当日数据可取
+        if (dataLen <= 0)
+        {
+            ErrorLogger.Log(null, "SinaMinuteChartService", $"非交易时段，dataLen={dataLen}，返回空数据");
+            return (new List<MinuteChartData>(), "非交易时段，无当日分时数据");
+        }
+
         var symbol = $"{market}{stockCode}";
         var url = $"https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol={symbol}&scale={minuteScale}&datalen={dataLen}";
 
@@ -91,7 +98,7 @@ public class SinaMinuteChartService
     {
         var now = DateTime.Now;
 
-        // 如果是周末，返回0
+        // 如果是周末，返回0（不获取历史数据）
         if (now.DayOfWeek == DayOfWeek.Saturday || now.DayOfWeek == DayOfWeek.Sunday)
         {
             return 0;
@@ -106,36 +113,32 @@ public class SinaMinuteChartService
         var afternoonEnd = new TimeSpan(15, 0, 0);
 
         var currentTime = now.TimeOfDay;
-        int totalMinutes = 0;
 
+        // 开盘前（9:30之前）- 返回0，不取历史数据
         if (currentTime < morningStart)
         {
-            // 开盘前
             return 0;
         }
+        // 上午交易中
         else if (currentTime >= morningStart && currentTime < morningEnd)
         {
-            // 上午交易中
-            totalMinutes = (int)(currentTime - morningStart).TotalMinutes;
+            return (int)(currentTime - morningStart).TotalMinutes;
         }
+        // 午间休市（11:30 - 13:00）
         else if (currentTime >= morningEnd && currentTime < afternoonStart)
         {
-            // 午间休市
-            totalMinutes = 120; // 上午120分钟
+            return 0; // 午间休市不获取历史数据，返回0
         }
+        // 下午交易中
         else if (currentTime >= afternoonStart && currentTime <= afternoonEnd)
         {
-            // 下午交易中
-            totalMinutes = 120 + (int)(currentTime - afternoonStart).TotalMinutes;
+            return 120 + (int)(currentTime - afternoonStart).TotalMinutes;
         }
+        // 收盘后（15:00 - 24:00）
         else
         {
-            // 收盘后
-            totalMinutes = 240; // 全天240分钟
+            return 0; // 收盘后不再获取历史分时数据，第二天开盘前没有当日数据
         }
-
-        // 至少返回30条数据（防止时间太早）
-        return Math.Max(totalMinutes, 30);
     }
 
     /// <summary>

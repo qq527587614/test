@@ -6,6 +6,7 @@ partial class DailyPickForm
 
     private System.Windows.Forms.DateTimePicker _dtpDate;
     private System.Windows.Forms.Button _btnRefresh;
+    private System.Windows.Forms.Button _btnAddFavorite;
     private System.Windows.Forms.CheckBox _chkDeepSeek;
     private System.Windows.Forms.DataGridView _dataGridView;
     private System.Windows.Forms.Label _lblStats;
@@ -29,6 +30,7 @@ partial class DailyPickForm
         this.components = new System.ComponentModel.Container();
         this._dtpDate = new System.Windows.Forms.DateTimePicker();
         this._btnRefresh = new System.Windows.Forms.Button();
+        this._btnAddFavorite = new System.Windows.Forms.Button();
         this._chkDeepSeek = new System.Windows.Forms.CheckBox();
         this._dataGridView = new System.Windows.Forms.DataGridView();
         this._lblStats = new System.Windows.Forms.Label();
@@ -56,7 +58,17 @@ partial class DailyPickForm
         this._btnRefresh.Text = "刷新选股";
         this._btnRefresh.UseVisualStyleBackColor = false;
         this._btnRefresh.Click += new System.EventHandler(this.BtnRefresh_Click);
-        // 
+        //
+        // _btnAddFavorite
+        //
+        this._btnAddFavorite.Location = new System.Drawing.Point(530, 10);
+        this._btnAddFavorite.Name = "_btnAddFavorite";
+        this._btnAddFavorite.Size = new System.Drawing.Size(100, 30);
+        this._btnAddFavorite.TabIndex = 6;
+        this._btnAddFavorite.Text = "加入自选";
+        this._btnAddFavorite.UseVisualStyleBackColor = true;
+        this._btnAddFavorite.Click += new System.EventHandler(this.BtnAddFavorite_Click);
+        //
         // _chkDeepSeek
         // 
         this._chkDeepSeek.AutoSize = true;
@@ -83,7 +95,7 @@ partial class DailyPickForm
         // _lblStats
         // 
         this._lblStats.AutoSize = true;
-        this._lblStats.Location = new System.Drawing.Point(550, 15);
+        this._lblStats.Location = new System.Drawing.Point(650, 15);
         this._lblStats.Name = "_lblStats";
         this._lblStats.Size = new System.Drawing.Size(0, 17);
         this._lblStats.TabIndex = 4;
@@ -93,6 +105,7 @@ partial class DailyPickForm
         this.toolBar.Controls.Add(this.lblDate);
         this.toolBar.Controls.Add(this._dtpDate);
         this.toolBar.Controls.Add(this._btnRefresh);
+        this.toolBar.Controls.Add(this._btnAddFavorite);
         this.toolBar.Controls.Add(this._chkDeepSeek);
         this.toolBar.Controls.Add(this._lblStats);
         this.toolBar.Dock = System.Windows.Forms.DockStyle.Top;

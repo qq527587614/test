@@ -3,6 +3,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using StockAnalysisSystem.Core;
+using StockAnalysisSystem.Core.Entities;
+using StockAnalysisSystem.Core.Utils;
 using StockAnalysisSystem.UI.Forms;
 
 namespace StockAnalysisSystem.UI;

@@ -26,6 +26,19 @@ namespace StockAnalysisSystem.Core.Utils
         {
             try
             {
+                // 记录到文件
+                WriteToFile(ex, context, parameters);
+            }
+            catch
+            {
+                // 确保日志记录本身不会导致程序崩溃
+            }
+        }
+
+        private static void WriteToFile(Exception? ex, string? context, object? parameters)
+        {
+            try
+            {
                 Directory.CreateDirectory(LogDir);
 
                 var logContent = new StringBuilder()
@@ -62,14 +75,6 @@ namespace StockAnalysisSystem.Core.Utils
             {
                 // 确保日志记录本身不会导致程序崩溃
             }
-        }
-
-        /// <summary>
-        /// 记录信息日志（无异常）
-        /// </summary>
-        public static void LogInfo(string context, string? message = null)
-        {
-            Log(null, context, message);
         }
 
         /// <summary>

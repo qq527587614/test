@@ -91,7 +91,29 @@ public class DailyPicker
         IProgress<string>? progress = null)
     {
         var results = new List<DailyPickResult>();
+        var now = DateTime.Now;
+
+        // 检查选股日期是否是今天且在开盘前
+        var isTodayBeforeOpen = tradeDate.Date == now.Date && now.TimeOfDay < new TimeSpan(9, 30, 0);
+        if (isTodayBeforeOpen)
+        {
+            progress?.Report("提示：当前为开盘前，当日无行情数据，建议选择昨日或更早日期");
+        }
+
         progress?.Report($"开始选股，日期: {tradeDate:yyyy-MM-dd}");
+
+        // 如果选择的是今天，自动改为上一个交易日
+        var actualTradeDate = tradeDate;
+        if (tradeDate.Date == now.Date)
+        {
+            // 查找上一个交易日
+            var lastTradeDate = await GetLastTradeDateAsync(now);
+            if (lastTradeDate.HasValue && lastTradeDate.Value < now.Date)
+            {
+                actualTradeDate = lastTradeDate.Value;
+                progress?.Report($"自动调整为上一个交易日: {actualTradeDate:yyyy-MM-dd}");
+            }
+        }
 
         // 在外部定义变量，使得catch块可以访问
         int stockCount = 0;
@@ -134,13 +156,13 @@ public class DailyPicker
             progress?.Report($"加载 {stocks.Count} 只股票的数据...");
 
             // 优化：批量查询日线数据（2次查询替代2N次查询）
-            var startDate = tradeDate.AddDays(-100);
-            
+            var startDate = actualTradeDate.AddDays(-100);
+
             // 批量获取所有股票的日线数据
-            var allDailyData = await _dailyDataRepo.GetByDateRangeAsync(startDate, tradeDate);
-            
+            var allDailyData = await _dailyDataRepo.GetByDateRangeAsync(startDate, actualTradeDate);
+
             // 批量获取所有股票的技术指标
-            var allIndicators = await _indicatorRepo.GetByDateRangeAsync(startDate, tradeDate);
+            var allIndicators = await _indicatorRepo.GetByDateRangeAsync(startDate, actualTradeDate);
             
             // 在内存中按股票ID分组
             var dailyDataByStockLookup = allDailyData.ToLookup(d => d.StockID);
@@ -203,7 +225,7 @@ public class DailyPicker
                     try
                     {
                         var signals = strategyInstance.GenerateSignals(stockId, dailyData, indicators);
-                        var todaySignal = signals.FirstOrDefault(s => s.Date.Date == tradeDate.Date);
+                        var todaySignal = signals.FirstOrDefault(s => s.Date.Date == actualTradeDate.Date);
 
                         if (todaySignal != null && todaySignal.Type == Strategies.SignalType.Buy)
                         {
@@ -404,7 +426,7 @@ public class DailyPicker
             progress?.Report("保存选股结果...");
             var dailyPicks = topResults.Select(r => new DailyPickEntity
             {
-                TradeDate = tradeDate,
+                TradeDate = actualTradeDate,
                 StockId = r.StockId,
                 StockCode = r.StockCode,
                 StockName = r.StockName,
@@ -415,9 +437,8 @@ public class DailyPicker
                 FinalScore = r.FinalScore
             }).ToList();
 
-            // 先删除当日已有结果
-            await _dailyPickRepo.DeleteByDateAsync(tradeDate);
-            await _dailyPickRepo.BulkInsertAsync(dailyPicks);
+            // 先删除当日已有结果，再插入新结果（同一事务）
+            await _dailyPickRepo.ReplaceByDateAsync(actualTradeDate, dailyPicks);
 
             progress?.Report($"选股完成，共选出 {topResults.Count} 只股票");
         }
@@ -466,5 +487,22 @@ public class DailyPicker
             IsGoldenCross = false,
             SignalCount = 1
         }).ToList();
+    }
+
+    /// <summary>
+    /// 获取指定日期之前的最后一个交易日
+    /// </summary>
+    private async Task<DateTime?> GetLastTradeDateAsync(DateTime date)
+    {
+        // 获取数据库中最近一个有数据的交易日
+        var latestDate = await _dailyDataRepo.GetLatestTradeDateAsync();
+
+        // 如果找到的日期在今天之前，返回它
+        if (latestDate.HasValue && latestDate.Value < date.Date)
+        {
+            return latestDate.Value;
+        }
+
+        return null;
     }
 }

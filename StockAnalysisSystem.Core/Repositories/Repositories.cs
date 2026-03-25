@@ -495,6 +495,51 @@ public class DailyPickRepository : IDailyPickRepository
         await _context.SaveChangesAsync();
     }
 
+    /// <summary>
+    /// 先删除当日结果，再批量插入（使用原始SQL删除，避免EF Core状态问题）
+    /// </summary>
+    public async Task ReplaceByDateAsync(DateTime date, List<DailyPickEntity> newPicks)
+    {
+        try
+        {
+            ErrorLogger.Log(null, "DailyPickRepository.ReplaceByDateAsync", $"开始处理，日期: {date:yyyy-MM-dd}, 新记录数: {newPicks.Count}");
+
+            // 打印当前上下文中所有待保存的实体
+            var pendingChanges = _context.ChangeTracker.Entries()
+                .Where(e => e.State != EntityState.Unchanged)
+                .Select(e => $"{e.Entity.GetType().Name}: {e.State}")
+                .ToList();
+            if (pendingChanges.Any())
+            {
+                ErrorLogger.Log(null, "DailyPickRepository.ReplaceByDateAsync", $"替换前待保存的实体: {string.Join(", ", pendingChanges)}");
+            }
+
+            // 使用原始 SQL 删除，避免 EF Core 变更跟踪问题
+            var deleted = await _context.Database.ExecuteSqlRawAsync(
+                "DELETE FROM DailyPick WHERE TradeDate = {0}", date);
+
+            ErrorLogger.Log(null, "DailyPickRepository.ReplaceByDateAsync", $"删除了 {deleted} 条记录");
+
+            // 清理 ChangeTracker，避免旧实体残留导致冲突
+            _context.ChangeTracker.Clear();
+
+            // 插入新记录
+            await _context.DailyPicks.AddRangeAsync(newPicks);
+
+            // 一次性保存
+            await _context.SaveChangesAsync();
+
+            ErrorLogger.Log(null, "DailyPickRepository.ReplaceByDateAsync", "保存成功");
+        }
+        catch (Exception ex)
+        {
+            // 保存失败时也要清理 ChangeTracker
+            _context.ChangeTracker.Clear();
+            ErrorLogger.Log(ex, "DailyPickRepository.ReplaceByDateAsync", $"错误: {ex.Message}, 内部错误: {ex.InnerException?.Message}");
+            throw;
+        }
+    }
+
     public async Task DeleteByDateAsync(DateTime date)
     {
         var picks = await _context.DailyPicks
@@ -560,9 +605,48 @@ public class StockFavoriteRepository : IStockFavoriteRepository
 
     public async Task<StockFavorite> AddAsync(StockFavorite favorite)
     {
-        _context.StockFavorites.Add(favorite);
-        await _context.SaveChangesAsync();
-        return favorite;
+        try
+        {
+            ErrorLogger.Log(null, "StockFavoriteRepository.AddAsync", $"准备添加: StockCode={favorite.StockCode}, AddedDate={favorite.AddedDate}");
+
+            // 打印当前上下文中所有待保存的实体
+            var pendingChanges = _context.ChangeTracker.Entries()
+                .Where(e => e.State != EntityState.Unchanged)
+                .Select(e => $"{e.Entity.GetType().Name}: {e.State}")
+                .ToList();
+            if (pendingChanges.Any())
+            {
+                ErrorLogger.Log(null, "StockFavoriteRepository.AddAsync", $"待保存的实体: {string.Join(", ", pendingChanges)}");
+                // 清理其他实体的变更跟踪，避免冲突
+                _context.ChangeTracker.Clear();
+            }
+
+            _context.StockFavorites.Add(favorite);
+            await _context.SaveChangesAsync();
+            ErrorLogger.Log(null, "StockFavoriteRepository.AddAsync", $"保存成功, EntityState={_context.Entry(favorite).State}");
+            return favorite;
+        }
+        catch (Exception ex)
+        {
+            var innerMsg = ex.InnerException?.Message ?? "无内部错误";
+
+            // 打印当前上下文中所有待保存的实体（即使出错也要打印）
+            var pendingChanges = _context.ChangeTracker.Entries()
+                .Where(e => e.State != EntityState.Unchanged)
+                .Select(e => $"{e.Entity.GetType().Name}: {e.State}")
+                .ToList();
+            if (pendingChanges.Any())
+            {
+                ErrorLogger.Log(ex, "StockFavoriteRepository.AddAsync", $"待保存的实体: {string.Join(", ", pendingChanges)}, 错误: {ex.Message}, 内部错误: {innerMsg}");
+            }
+            else
+            {
+                ErrorLogger.Log(ex, "StockFavoriteRepository.AddAsync", $"股票代码: {favorite.StockCode}, 错误: {ex.Message}, 内部错误: {innerMsg}");
+            }
+            // 清理 ChangeTracker，避免残留的脏数据影响后续操作
+            _context.ChangeTracker.Clear();
+            throw;
+        }
     }
 
     public async Task DeleteAsync(string stockCode)
@@ -570,6 +654,8 @@ public class StockFavoriteRepository : IStockFavoriteRepository
         var favorite = await GetByStockCodeAsync(stockCode);
         if (favorite != null)
         {
+            // 清理 ChangeTracker
+            _context.ChangeTracker.Clear();
             _context.StockFavorites.Remove(favorite);
             await _context.SaveChangesAsync();
         }

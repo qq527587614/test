@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using StockAnalysisSystem.Core.Entities;
+using StockAnalysisSystem.Core.RealtimeData;
 using StockAnalysisSystem.Core.Services;
 using StockAnalysisSystem.Core.Utils;
 
@@ -9,6 +10,9 @@ public partial class FavoriteForm : Form
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly StockFavoriteService _favoriteService;
+    private readonly TencentRealtimeService _realtimeService;
+    private System.Windows.Forms.Timer _refreshTimer = null!;
+    private List<StockFavorite> _cachedFavorites = new();
 
     private DataGridView _dgvFavorites = null!;
     private ToolStrip _toolStrip = null!;
@@ -18,13 +22,15 @@ public partial class FavoriteForm : Form
     private ToolStripLabel _lblStatus = null!;
     private Label _lblNoData = null!;
 
-    public FavoriteForm(IServiceProvider serviceProvider, StockFavoriteService favoriteService)
+    public FavoriteForm(IServiceProvider serviceProvider, StockFavoriteService favoriteService, TencentRealtimeService realtimeService)
     {
         _serviceProvider = serviceProvider;
         _favoriteService = favoriteService;
+        _realtimeService = realtimeService;
         InitializeComponent();
         InitializeControls();
         LoadDataAsync();
+        StartAutoRefresh();
     }
 
     private void InitializeComponent()
@@ -197,6 +203,9 @@ public partial class FavoriteForm : Form
             _dgvFavorites.Visible = true;
             _lblNoData.Visible = false;
 
+            // 缓存自选股列表，用于后续刷新
+            _cachedFavorites = favorites;
+
             foreach (var f in favorites)
             {
                 var changePercent = f.ChangePercent?.ToString("F2") ?? "-";
@@ -335,5 +344,74 @@ public partial class FavoriteForm : Form
     private async void BtnRefresh_Click(object? sender, EventArgs e)
     {
         LoadDataAsync();
+    }
+
+    private void StartAutoRefresh()
+    {
+        _refreshTimer = new System.Windows.Forms.Timer
+        {
+            Interval = 5000 // 5秒
+        };
+        _refreshTimer.Tick += async (s, e) => await RefreshPricesAsync();
+        _refreshTimer.Start();
+    }
+
+    private async Task RefreshPricesAsync()
+    {
+        if (_cachedFavorites.Count == 0) return;
+
+        try
+        {
+            // 构建股票代码列表（带前缀）
+            var stockCodes = new List<string>();
+            foreach (var f in _cachedFavorites)
+            {
+                var code6 = f.StockCode.PadLeft(6, '0');
+                var prefix = code6.StartsWith("60") || code6.StartsWith("68") ? "sh" : "sz";
+                stockCodes.Add($"{prefix}{code6}");
+            }
+
+            // 批量获取实时数据
+            var realtimeData = await _realtimeService.GetRealtimeDataAsync(stockCodes);
+
+            // 创建实时数据映射
+            var realtimeMap = new Dictionary<string, RealtimeStockData>();
+            foreach (var rd in realtimeData)
+            {
+                var code = rd.StockCode;
+                if (code.StartsWith("sz") || code.StartsWith("sh"))
+                {
+                    code = code.Substring(2);
+                }
+                realtimeMap[code] = rd;
+            }
+
+            // 更新DataGridView中的价格和涨跌幅
+            foreach (DataGridViewRow row in _dgvFavorites.Rows)
+            {
+                var stockCode = row.Cells["StockCode"].Value?.ToString() ?? "";
+                if (realtimeMap.TryGetValue(stockCode, out var rd))
+                {
+                    row.Cells["CurrentPrice"].Value = rd.CurrentPrice != 0 ? rd.CurrentPrice.ToString("F2") : "-";
+                    row.Cells["ChangePercent"].Value = rd.ChangePercent != 0 ? rd.ChangePercent.ToString("F2") : "0.00";
+                    row.Cells["TurnoverRate"].Value = rd.TurnoverRate != 0 ? rd.TurnoverRate.ToString("F2") : "-";
+
+                    // 设置涨跌幅颜色
+                    var cell = row.Cells["ChangePercent"];
+                    cell.Style.ForeColor = rd.ChangePercent > 0 ? Color.Red : (rd.ChangePercent < 0 ? Color.Lime : Color.White);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorLogger.Log(ex, "FavoriteForm.RefreshPricesAsync", "刷新行情失败");
+        }
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        _refreshTimer?.Stop();
+        _refreshTimer?.Dispose();
+        base.OnFormClosed(e);
     }
 }

@@ -1,6 +1,7 @@
 using StockAnalysisSystem.Core.Entities;
 using StockAnalysisSystem.Core.Repositories;
 using StockAnalysisSystem.Core.RealtimeData;
+using StockAnalysisSystem.Core.Utils;
 
 namespace StockAnalysisSystem.Core.Services;
 
@@ -43,7 +44,10 @@ public class StockFavoriteService
         var normalizedCode = NormalizeStockCode(stockCode);
 
         // 检查是否已存在
-        if (await _favoriteRepository.ExistsAsync(normalizedCode))
+        var exists = await _favoriteRepository.ExistsAsync(normalizedCode);
+        ErrorLogger.Log(null, "StockFavoriteService.AddFavoriteAsync", $"股票代码: {normalizedCode}, 是否存在: {exists}");
+
+        if (exists)
         {
             return "股票已在自选股中";
         }
@@ -64,6 +68,8 @@ public class StockFavoriteService
         };
 
         await _favoriteRepository.AddAsync(favorite);
+        ErrorLogger.Log(null, "StockFavoriteService.AddFavoriteAsync", $"股票代码: {normalizedCode}, 添加成功");
+
         return "添加成功";
     }
 
@@ -83,6 +89,8 @@ public class StockFavoriteService
     public async Task<List<StockFavorite>> GetFavoritesWithRealtimeDataAsync()
     {
         var favorites = await _favoriteRepository.GetAllAsync();
+
+        ErrorLogger.Log(null, "StockFavoriteService.GetFavoritesWithRealtimeDataAsync", $"查询到 {favorites.Count} 条自选股记录");
 
         if (favorites.Count == 0)
         {
