@@ -205,9 +205,10 @@ public class PlateService
             progressCallback?.Invoke(dayIndex + 1, totalDates, $"正在计算第 {dayIndex + 1}/{totalDates} 天 ({date:yyyy-MM-dd})...");
 
             // 直接在数据库层面进行关联和计算
+            // 成分股表的股票代码去掉前两个字母（sh/sz）后与股票日线表关联
             var plateDailyDataList = await (
                 from ps in dbContext.PlateStocks
-                join sd in dbContext.StockDailyData on ps.stock_code equals sd.StockID
+                join sd in dbContext.StockDailyData on ps.stock_code.Substring(2) equals sd.StockID
                 where sd.TradeDate.Date == dateValue
                 group new { sd.ChangePercent, sd.Amount, sd.TurnoverRate } by ps.plate_id into g
                 select new
