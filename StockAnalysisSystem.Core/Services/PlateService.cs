@@ -139,6 +139,7 @@ public class PlateService
     {
         using var dbContext = await _dbContextFactory.CreateDbContextAsync();
 
+        progressCallback?.Invoke(1, 100, "正在获取板块信息...");
         // 获取所有板块
         var plates = await dbContext.Plates.ToListAsync();
 
@@ -148,12 +149,14 @@ public class PlateService
             return 0;
         }
 
+        progressCallback?.Invoke(2, 100, "正在获取已有板块日线数据...");
         // 获取所有已有板块日线数据的日期
         var existingDates = await dbContext.PlateDailyData
             .Select(pd => pd.trade_date.Date)
             .Distinct()
             .ToListAsync();
 
+        progressCallback?.Invoke(3, 100, "正在获取股票日线数据日期...");
         // 获取所有有日线数据的日期
         var allDatesWithData = await dbContext.StockDailyData
             .Select(d => d.TradeDate.Date)
@@ -179,6 +182,7 @@ public class PlateService
             return 0;
         }
 
+        progressCallback?.Invoke(4, 100, $"共需计算 {datesToCalc.Count} 个日期，正在预加载板块成分股...");
         // 预加载所有板块成分股关系
         var allPlateStocks = await dbContext.PlateStocks
             .Include(ps => ps.Plate)
@@ -188,6 +192,7 @@ public class PlateService
         var datesToCalcSet = datesToCalc.ToHashSet();
         var datesToCalcList = datesToCalc.OrderBy(d => d).ToList();
 
+        progressCallback?.Invoke(5, 100, $"正在加载 {datesToCalc.Count} 个日期的日线数据 (预计需要一些时间)...");
         // 批量查询所有相关日期的日线数据
         var relevantDailyData = await dbContext.StockDailyData
             .Where(d => datesToCalcSet.Contains(d.TradeDate.Date))
@@ -201,6 +206,7 @@ public class PlateService
                 g => g.ToDictionary(d => d.StockID)
             );
 
+        progressCallback?.Invoke(6, 100, "正在加载涨停数据...");
         // 预加载涨停数据（用于计算涨停数量）
         var relevantLimitUpData = await dbContext.StockLimitUpAnalysis
             .Where(s => datesToCalcSet.Contains(s.analysis_date.Date))
@@ -214,6 +220,7 @@ public class PlateService
                 g => g.ToLookup(s => s.code)
             );
 
+        progressCallback?.Invoke(7, 100, "正在预计算板块成分股...");
         // 预计算每个板块的成分股列表（带前缀和不带前缀）
         var plateStockDataByPlateId = allPlateStocks
             .GroupBy(ps => ps.plate_id)
