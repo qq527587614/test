@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using StockAnalysisSystem.Core.DailyPick;
+using StockAnalysisSystem.Core.Entities;
 using StockAnalysisSystem.Core.Repositories;
 using StockAnalysisSystem.Core.Services;
 using StockAnalysisSystem.Core.Utils;
@@ -29,6 +30,8 @@ public partial class DailyPickForm : Form
         _dataGridView.Columns.Add("Reason", "选股理由");
         _dataGridView.Columns.Add("DeepSeekScore", "DeepSeek评分");
         _dataGridView.Columns.Add("FinalScore", "最终得分");
+        _dataGridView.Columns.Add("LimitUpCount", "历史涨停次数");
+        _dataGridView.Columns.Add("LimitUpPlates", "历史涨停板块");
 
         // 添加操作列（按钮）
         var btnColumn = new DataGridViewButtonColumn
@@ -103,13 +106,50 @@ public partial class DailyPickForm : Form
     private void DisplayResults(List<DailyPickResult> results)
     {
         _dataGridView.Rows.Clear();
+
+        // 获取历史涨停数据
+        var limitUpData = new Dictionary<string, (int Count, string Plates)>();
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var dbContext = scope.ServiceProvider.GetRequiredService<Core.AppDbContext>();
+
+            var stockCodes = results.Select(r => r.StockCode).Distinct().ToList();
+            if (stockCodes.Any())
+            {
+                // 涨停表股票代码需要加前缀才能匹配 (sz/sh)
+                var stockCodesWithPrefix = stockCodes
+                    .Select(code => code.StartsWith("6") ? "sh" + code : "sz" + code)
+                    .ToList();
+
+                var limitUpRecords = dbContext.StockLimitUpAnalysis
+                    .Where(s => stockCodesWithPrefix.Contains(s.code))
+                    .ToList();
+
+                // 存储时去掉前缀，保持与选股结果一致
+                limitUpData = limitUpRecords
+                    .GroupBy(s => s.code.Length > 2 ? s.code.Substring(2) : s.code)
+                    .ToDictionary(
+                        g => g.Key,
+                        g => (Count: g.Count(), Plates: string.Join(", ", g.Where(p => !string.IsNullOrEmpty(p.plate_name)).Select(p => p.plate_name!).Distinct()))
+                    );
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorLogger.Log(ex, "DailyPickForm.DisplayResults", "获取涨停数据失败");
+        }
+
         foreach (var r in results)
         {
+            var limitUpInfo = limitUpData.TryGetValue(r.StockCode, out var info) ? info : (Count: 0, Plates: "");
             _dataGridView.Rows.Add(
                 r.StockCode, r.StockName, r.Industry,
                 r.StrategyName, r.Reason,
                 r.DeepSeekScore?.ToString("F1") ?? "-",
-                r.FinalScore.ToString("F1")
+                r.FinalScore.ToString("F1"),
+                limitUpInfo.Count > 0 ? limitUpInfo.Count.ToString() : "-",
+                !string.IsNullOrEmpty(limitUpInfo.Plates) ? limitUpInfo.Plates : "-"
             );
         }
 

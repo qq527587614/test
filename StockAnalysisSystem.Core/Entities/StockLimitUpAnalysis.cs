@@ -28,7 +28,7 @@ public class StockLimitUpAnalysis
     [Column("pct_chg", TypeName = "decimal(8,4)")]
     public decimal? pct_chg { get; set; }
 
-    [Column("turn", TypeName = "decimal(8,4)")]
+    [Column("turn", TypeName = "decimal(15,2)")]
     public decimal? turn { get; set; }
 
     [Column("amount", TypeName = "decimal(15,2)")]
@@ -69,11 +69,11 @@ public class StockLimitUpAnalysis
 
     [Column("continuous_boards")]
     [StringLength(20)]
-    public string continuous_boards { get; set; } = "0";
+    public string? continuous_boards { get; set; }
 
     [Column("days_limit_up_count")]
     [StringLength(20)]
-    public string days_limit_up_count { get; set; } = "0";
+    public string? days_limit_up_count { get; set; }
 
     [Column("analysis_date")]
     public DateTime analysis_date { get; set; }
