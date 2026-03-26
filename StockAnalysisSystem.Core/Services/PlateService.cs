@@ -135,7 +135,7 @@ public class PlateService
     /// 增量计算板块日线数据
     /// 第一次运行时计算所有日线数据的日期，之后只计算新增的日期
     /// </summary>
-    public async Task<int> CalcPlateDailyDataAsync()
+    public async Task<int> CalcPlateDailyDataAsync(Action<int, int, string>? progressCallback = null)
     {
         using var dbContext = await _dbContextFactory.CreateDbContextAsync();
 
@@ -230,12 +230,18 @@ public class PlateService
 
         int calcCount = 0;
         var plateDailyDataList = new List<PlateDailyData>(plates.Count);
+        var totalDates = datesToCalcList.Count;
+        var currentDateIndex = 0;
 
         foreach (var date in datesToCalcList)
         {
+            currentDateIndex++;
             var dateValue = date;
             var dailyDataByCode = dailyDataByDateAndCode.TryGetValue(dateValue, out var dataByCode) ? dataByCode : new Dictionary<string, StockDailyData>();
             var limitUpByCode = limitUpByDateAndCode.TryGetValue(dateValue, out var limitUpLookup) ? limitUpLookup : null;
+
+            // 报告进度
+            progressCallback?.Invoke(currentDateIndex, totalDates, $"正在计算 {date:yyyy-MM-dd} ({currentDateIndex}/{totalDates})");
 
             foreach (var plate in plates)
             {
@@ -309,6 +315,9 @@ public class PlateService
                 await dbContext.SaveChangesAsync();
                 plateDailyDataList.Clear();
                 ErrorLogger.Log(null, "PlateService.CalcPlateDailyData", $"日期 {date:yyyy-MM-dd} 计算完成: {plateDailyDataList.Count} 个板块");
+
+                // 保存后报告进度
+                progressCallback?.Invoke(currentDateIndex, totalDates, $"完成 {date:yyyy-MM-dd}: {plateDailyDataList.Count} 个板块");
             }
         }
 

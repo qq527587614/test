@@ -278,6 +278,7 @@ public partial class DataManagerForm : Form
     private async void BtnCalcPlateDaily_Click(object? sender, EventArgs e)
     {
         _btnCalcPlateDaily.Enabled = false;
+        _progressBar.Value = 0;
         Log("开始计算板块日线数据（增量计算）...");
 
         try
@@ -285,8 +286,27 @@ public partial class DataManagerForm : Form
             using var scope = _serviceProvider.CreateScope();
             var plateService = scope.ServiceProvider.GetRequiredService<PlateService>();
 
-            var count = await plateService.CalcPlateDailyDataAsync();
+            var count = await plateService.CalcPlateDailyDataAsync((current, total, message) =>
+            {
+                // 更新进度条
+                var progress = (int)((double)current / total * 100);
+                if (_progressBar.InvokeRequired)
+                {
+                    _progressBar.Invoke(() =>
+                    {
+                        _progressBar.Value = Math.Min(progress, 100);
+                    });
+                }
+                else
+                {
+                    _progressBar.Value = Math.Min(progress, 100);
+                }
 
+                // 显示日志
+                Log(message);
+            });
+
+            _progressBar.Value = 100;
             Log($"板块日线计算完成: 共计算 {count} 条数据");
         }
         catch (Exception ex)
