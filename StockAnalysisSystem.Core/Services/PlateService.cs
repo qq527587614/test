@@ -214,11 +214,22 @@ public class PlateService
                 g => g.ToLookup(s => s.code)
             );
 
-        int calcCount = 0;
-        var plateDailyDataList = new List<PlateDailyData>();
+        // 预计算每个板块的成分股列表（带前缀和不带前缀）
+        var plateStockDataByPlateId = allPlateStocks
+            .GroupBy(ps => ps.plate_id)
+            .ToDictionary(
+                g => g.Key,
+                g => new
+                {
+                    StockCodes = g.Select(ps => ps.stock_code).ToList(),
+                    StockCodesWithPrefix = g.Select(ps =>
+                        ps.stock_code.StartsWith("6") ? "sh" + ps.stock_code : "sz" + ps.stock_code
+                    ).ToList()
+                }
+            );
 
-        // 使用字典加速查找
-        var plateStocksByPlateId = allPlateStocks.ToLookup(ps => ps.plate_id);
+        int calcCount = 0;
+        var plateDailyDataList = new List<PlateDailyData>(plates.Count);
 
         foreach (var date in datesToCalcList)
         {
@@ -228,38 +239,51 @@ public class PlateService
 
             foreach (var plate in plates)
             {
-                // 从内存获取成分股，不需要查询数据库
-                var stockCodes = plateStocksByPlateId[plate.id]
-                    .Select(ps => ps.stock_code)
-                    .ToList();
+                // 从预计算的数据获取成分股
+                if (!plateStockDataByPlateId.TryGetValue(plate.id, out var plateStockData))
+                    continue;
 
-                if (!stockCodes.Any()) continue;
-
-                // 股票代码需要加前缀才能匹配日线表
-                var stockCodesWithPrefix = stockCodes
-                    .Select(code => code.StartsWith("6") ? "sh" + code : "sz" + code)
-                    .ToHashSet();
+                if (!plateStockData.StockCodes.Any()) continue;
 
                 // 从内存获取成分股当天的日线数据
-                var dailyData = stockCodesWithPrefix
-                    .Where(code => dailyDataByCode.ContainsKey(code))
-                    .Select(code => dailyDataByCode[code])
-                    .ToList();
+                var dailyData = new List<StockDailyData>(plateStockData.StockCodesWithPrefix.Count);
+                foreach (var code in plateStockData.StockCodesWithPrefix)
+                {
+                    if (dailyDataByCode.TryGetValue(code, out var data))
+                    {
+                        dailyData.Add(data);
+                    }
+                }
 
-                if (!dailyData.Any()) continue;
+                if (dailyData.Count == 0) continue;
 
                 // 计算板块统计数据
                 var stockCount = dailyData.Count;
-                var avgPctChg = dailyData.Average(d => d.ChangePercent ?? 0);
-                var totalAmount = dailyData.Sum(d => d.Amount);
-                var avgTurnover = dailyData.Average(d => d.TurnoverRate ?? 0);
+                var avgPctChg = 0m;
+                var totalAmount = 0m;
+                var avgTurnover = 0m;
+
+                // 使用for循环提高性能
+                for (int i = 0; i < stockCount; i++)
+                {
+                    var d = dailyData[i];
+                    avgPctChg += d.ChangePercent ?? 0;
+                    totalAmount += d.Amount;
+                    avgTurnover += d.TurnoverRate ?? 0;
+                }
+                avgPctChg /= stockCount;
+                avgTurnover /= stockCount;
 
                 // 从内存获取当天涨停数量
-                var limitUpCount = stockCodes.Count(code =>
+                var limitUpCount = 0;
+                if (limitUpByCode != null)
                 {
-                    var prefix = code.StartsWith("sh") ? code.Substring(2) : code.Substring(2); // 去掉前缀
-                    return limitUpByCode != null && limitUpByCode.Contains(prefix);
-                });
+                    foreach (var code in plateStockData.StockCodes)
+                    {
+                        if (limitUpByCode.Contains(code))
+                            limitUpCount++;
+                    }
+                }
 
                 // 新增板块日线数据
                 var plateDailyData = new PlateDailyData
@@ -284,7 +308,7 @@ public class PlateService
                 await dbContext.PlateDailyData.AddRangeAsync(plateDailyDataList);
                 await dbContext.SaveChangesAsync();
                 plateDailyDataList.Clear();
-                ErrorLogger.Log(null, "PlateService.CalcPlateDailyData", $"日期 {date:yyyy-MM-dd} 计算完成: {calcCount} 个板块");
+                ErrorLogger.Log(null, "PlateService.CalcPlateDailyData", $"日期 {date:yyyy-MM-dd} 计算完成: {plateDailyDataList.Count} 个板块");
             }
         }
 
