@@ -186,34 +186,22 @@ public class PlateService
         var totalDates = datesToCalcList.Count;
         int calcCount = 0;
 
-        // 查询已存在的板块日线数据（避免重复插入）
-        var existingPlateDailyData = await dbContext.PlateDailyData
-            .Select(pd => new { pd.plate_id, pd.trade_date.Date })
-            .ToListAsync();
+        // 判断是否为首次计算
+        bool isFirstCalculation = !existingDates.Any();
 
-        // 用于快速检查是否已存在：按板块ID分组
-        var existingPlateDailyDict = existingPlateDailyData
-            .GroupBy(pd => pd.plate_id)
-            .ToDictionary(g => g.Key, g => g.Select(pd => pd.Date).ToHashSet());
-
-        // 逐天计算
-        for (int dayIndex = 0; dayIndex < totalDates; dayIndex++)
+        if (isFirstCalculation)
         {
-            var date = datesToCalcList[dayIndex];
-            var dateValue = date.Date;
+            // 首次计算：一次性查询所有日期，按日期和板块ID分组
+            progressCallback?.Invoke(5, 100, "首次计算：正在一次性查询所有日期的数据...");
 
-            progressCallback?.Invoke(dayIndex + 1, totalDates, $"正在计算第 {dayIndex + 1}/{totalDates} 天 ({date:yyyy-MM-dd})...");
-
-            // 直接在数据库层面进行关联和计算
-            // 成分股表的股票代码去掉前两个字母（sh/sz）后与股票日线表关联
-            var plateDailyDataList = await (
+            var allPlateDailyData = await (
                 from ps in dbContext.PlateStocks
-                join sd in dbContext.StockDailyData on ps.stock_code.Substring(2) equals sd.StockID
-                where sd.TradeDate.Date == dateValue
-                group new { sd.ChangePercent, sd.Amount, sd.TurnoverRate } by ps.plate_id into g
+                join sd in dbContext.StockDailyData on ps.stock_code.Substring(2) equals sd.StockCode
+                group new { sd.TradeDate.Date, sd.ChangePercent, sd.Amount, sd.TurnoverRate } by new { ps.plate_id, Date = sd.TradeDate.Date } into g
                 select new
                 {
-                    plate_id = g.Key,
+                    plate_id = g.Key.plate_id,
+                    trade_date = g.Key.Date,
                     stock_count = g.Count(),
                     avg_pct_chg = g.Average(d => d.ChangePercent ?? 0),
                     total_amount = g.Sum(d => d.Amount),
@@ -221,43 +209,107 @@ public class PlateService
                 }
             ).ToListAsync();
 
-            var plateDailyDataToInsert = new List<PlateDailyData>();
+            progressCallback?.Invoke(6, 100, $"正在插入 {allPlateDailyData.Count} 条板块日线数据...");
 
-            foreach (var calculatedData in plateDailyDataList)
+            // 一次性插入所有数据
+            var plateDailyDataToInsert = allPlateDailyData.Select(d => new PlateDailyData
             {
-                // 检查是否已存在
-                if (existingPlateDailyDict.TryGetValue(calculatedData.plate_id, out var plateExistingDates) && plateExistingDates.Contains(dateValue))
-                {
-                    // 已存在，跳过
-                    continue;
-                }
-                else
-                {
-                    // 新增
-                    var plateDailyData = new PlateDailyData
+                plate_id = d.plate_id,
+                trade_date = d.trade_date,
+                stock_count = d.stock_count,
+                limit_up_count = 0,
+                avg_pct_chg = d.avg_pct_chg,
+                total_amount = d.total_amount,
+                avg_turnover = d.avg_turnover,
+                created_time = DateTime.Now,
+                updated_time = DateTime.Now
+            }).ToList();
+
+            await dbContext.PlateDailyData.AddRangeAsync(plateDailyDataToInsert);
+            await dbContext.SaveChangesAsync();
+
+            calcCount = plateDailyDataToInsert.Count;
+
+            progressCallback?.Invoke(100, 100, $"首次计算完成：共插入 {calcCount} 条板块日线数据");
+        }
+        else
+        {
+            // 增量计算：逐天计算
+            progressCallback?.Invoke(5, 100, "增量计算模式：逐天计算...");
+
+            // 查询已存在的板块日线数据（避免重复插入）
+            var existingPlateDailyData = await dbContext.PlateDailyData
+                .Select(pd => new { pd.plate_id, pd.trade_date.Date })
+                .ToListAsync();
+
+            // 用于快速检查是否已存在：按板块ID分组
+            var existingPlateDailyDict = existingPlateDailyData
+                .GroupBy(pd => pd.plate_id)
+                .ToDictionary(g => g.Key, g => g.Select(pd => pd.Date).ToHashSet());
+
+            // 逐天计算
+            for (int dayIndex = 0; dayIndex < totalDates; dayIndex++)
+            {
+                var date = datesToCalcList[dayIndex];
+                var dateValue = date.Date;
+
+                progressCallback?.Invoke(dayIndex + 1, totalDates, $"正在计算第 {dayIndex + 1}/{totalDates} 天 ({date:yyyy-MM-dd})...");
+
+                // 直接在数据库层面进行关联和计算
+                // 成分股表的股票代码去掉前两个字母（sh/sz）后与股票日线表关联
+                var plateDailyDataList = await (
+                    from ps in dbContext.PlateStocks
+                    join sd in dbContext.StockDailyData on ps.stock_code.Substring(2) equals sd.StockCode
+                    where sd.TradeDate.Date == dateValue
+                    group new { sd.ChangePercent, sd.Amount, sd.TurnoverRate } by ps.plate_id into g
+                    select new
                     {
-                        plate_id = calculatedData.plate_id,
-                        trade_date = date,
-                        stock_count = calculatedData.stock_count,
-                        limit_up_count = 0,
-                        avg_pct_chg = calculatedData.avg_pct_chg,
-                        total_amount = calculatedData.total_amount,
-                        avg_turnover = calculatedData.avg_turnover,
-                        created_time = DateTime.Now,
-                        updated_time = DateTime.Now
-                    };
-                    plateDailyDataToInsert.Add(plateDailyData);
-                    calcCount++;
+                        plate_id = g.Key,
+                        stock_count = g.Count(),
+                        avg_pct_chg = g.Average(d => d.ChangePercent ?? 0),
+                        total_amount = g.Sum(d => d.Amount),
+                        avg_turnover = g.Average(d => d.TurnoverRate ?? 0)
+                    }
+                ).ToListAsync();
+
+                var plateDailyDataToInsert = new List<PlateDailyData>();
+
+                foreach (var calculatedData in plateDailyDataList)
+                {
+                    // 检查是否已存在
+                    if (existingPlateDailyDict.TryGetValue(calculatedData.plate_id, out var plateExistingDates) && plateExistingDates.Contains(dateValue))
+                    {
+                        // 已存在，跳过
+                        continue;
+                    }
+                    else
+                    {
+                        // 新增
+                        var plateDailyData = new PlateDailyData
+                        {
+                            plate_id = calculatedData.plate_id,
+                            trade_date = date,
+                            stock_count = calculatedData.stock_count,
+                            limit_up_count = 0,
+                            avg_pct_chg = calculatedData.avg_pct_chg,
+                            total_amount = calculatedData.total_amount,
+                            avg_turnover = calculatedData.avg_turnover,
+                            created_time = DateTime.Now,
+                            updated_time = DateTime.Now
+                        };
+                        plateDailyDataToInsert.Add(plateDailyData);
+                        calcCount++;
+                    }
                 }
-            }
 
-            // 批量保存
-            if (plateDailyDataToInsert.Any())
-            {
-                await dbContext.PlateDailyData.AddRangeAsync(plateDailyDataToInsert);
-                await dbContext.SaveChangesAsync();
+                // 批量保存
+                if (plateDailyDataToInsert.Any())
+                {
+                    await dbContext.PlateDailyData.AddRangeAsync(plateDailyDataToInsert);
+                    await dbContext.SaveChangesAsync();
 
-                progressCallback?.Invoke(dayIndex + 1, totalDates, $"完成第 {dayIndex + 1}/{totalDates} 天 ({date:yyyy-MM-dd}): 新增 {plateDailyDataToInsert.Count} 个板块");
+                    progressCallback?.Invoke(dayIndex + 1, totalDates, $"完成第 {dayIndex + 1}/{totalDates} 天 ({date:yyyy-MM-dd}): 新增 {plateDailyDataToInsert.Count} 个板块");
+                }
             }
         }
 
