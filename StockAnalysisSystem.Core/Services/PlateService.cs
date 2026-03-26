@@ -37,7 +37,18 @@ public class PlateService
             return 0;
         }
 
+        // 预加载所有板块
+        var allPlates = await dbContext.Plates.ToListAsync();
+        var platesByCode = allPlates.ToDictionary(p => p.plate_code);
+
+        // 预加载所有成分股关系（用于快速检查是否已存在）
+        var allPlateStocks = await dbContext.PlateStocks.ToListAsync();
+        var existingPlateStocksSet = allPlateStocks
+            .Select(ps => (ps.plate_id, ps.stock_code))
+            .ToHashSet();
+
         int syncCount = 0;
+        var newPlateStocks = new List<PlateStock>();
 
         foreach (var date in datesWithLimitUp)
         {
@@ -58,9 +69,8 @@ public class PlateService
                 var plateCode = group.Key.plate_code;
                 var plateName = group.Key.plate_name;
 
-                // 查找或创建板块
-                var plate = await dbContext.Plates.FirstOrDefaultAsync(p => p.plate_code == plateCode);
-                if (plate == null)
+                // 从内存查找或创建板块
+                if (!platesByCode.TryGetValue(plateCode, out var plate))
                 {
                     plate = new Plate
                     {
@@ -70,7 +80,7 @@ public class PlateService
                         updated_time = DateTime.Now
                     };
                     dbContext.Plates.Add(plate);
-                    await dbContext.SaveChangesAsync();
+                    platesByCode[plateCode] = plate;
                 }
 
                 // 更新板块名称（可能变化）
@@ -88,13 +98,11 @@ public class PlateService
 
                 foreach (var stock in stockCodesInPlate)
                 {
-                    // 检查成分股是否已存在
-                    var existingStock = await dbContext.PlateStocks
-                        .FirstOrDefaultAsync(ps => ps.plate_id == plate.id && ps.stock_code == stock.code);
-
-                    if (existingStock == null)
+                    // 从内存检查成分股是否已存在
+                    var stockKey = (plate.id, stock.code);
+                    if (!existingPlateStocksSet.Contains(stockKey))
                     {
-                        // 新增成分股
+                        // 新增成分股（保存到列表，稍后批量插入）
                         var plateStock = new PlateStock
                         {
                             plate_id = plate.id,
@@ -103,13 +111,20 @@ public class PlateService
                             join_date = date,
                             created_time = DateTime.Now
                         };
-                        dbContext.PlateStocks.Add(plateStock);
+                        newPlateStocks.Add(plateStock);
+                        existingPlateStocksSet.Add(stockKey); // 标记为已存在，避免重复
                         syncCount++;
                     }
                 }
             }
 
-            await dbContext.SaveChangesAsync();
+            // 批量保存成分股
+            if (newPlateStocks.Any())
+            {
+                await dbContext.PlateStocks.AddRangeAsync(newPlateStocks);
+                await dbContext.SaveChangesAsync();
+                newPlateStocks.Clear();
+            }
         }
 
         ErrorLogger.Log(null, "PlateService.SyncPlatesFromLimitUp", $"同步完成: 新增 {syncCount} 个成分股");
