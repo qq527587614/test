@@ -188,39 +188,10 @@ public class PlateService
             .Include(ps => ps.Plate)
             .ToListAsync();
 
-        // 按日期分组要计算的股票代码
-        var datesToCalcSet = datesToCalc.ToHashSet();
+        // 按日期排序
         var datesToCalcList = datesToCalc.OrderBy(d => d).ToList();
+        var totalDates = datesToCalcList.Count;
 
-        progressCallback?.Invoke(5, 100, $"正在加载 {datesToCalc.Count} 个日期的日线数据 (预计需要一些时间)...");
-        // 批量查询所有相关日期的日线数据
-        var relevantDailyData = await dbContext.StockDailyData
-            .Where(d => datesToCalcSet.Contains(d.TradeDate.Date))
-            .ToListAsync();
-
-        // 按日期和股票代码索引日线数据
-        var dailyDataByDateAndCode = relevantDailyData
-            .GroupBy(d => d.TradeDate.Date)
-            .ToDictionary(
-                g => g.Key,
-                g => g.ToDictionary(d => d.StockID)
-            );
-
-        progressCallback?.Invoke(6, 100, "正在加载涨停数据...");
-        // 预加载涨停数据（用于计算涨停数量）
-        var relevantLimitUpData = await dbContext.StockLimitUpAnalysis
-            .Where(s => datesToCalcSet.Contains(s.analysis_date.Date))
-            .Select(s => new { s.code, Date = s.analysis_date.Date, s.plate_name })
-            .ToListAsync();
-
-        var limitUpByDateAndCode = relevantLimitUpData
-            .GroupBy(s => s.Date)
-            .ToDictionary(
-                g => g.Key,
-                g => g.ToLookup(s => s.code)
-            );
-
-        progressCallback?.Invoke(7, 100, "正在预计算板块成分股...");
         // 预计算每个板块的成分股列表（带前缀和不带前缀）
         var plateStockDataByPlateId = allPlateStocks
             .GroupBy(ps => ps.plate_id)
@@ -236,30 +207,44 @@ public class PlateService
             );
 
         int calcCount = 0;
-        var plateDailyDataList = new List<PlateDailyData>(plates.Count);
-        var totalDates = datesToCalcList.Count;
-        var currentDateIndex = 0;
 
-        foreach (var date in datesToCalcList)
+        // 逐天计算，每天单独查询和处理，避免一次性加载大量数据
+        for (int dayIndex = 0; dayIndex < totalDates; dayIndex++)
         {
-            currentDateIndex++;
-            var dateValue = date;
-            var dailyDataByCode = dailyDataByDateAndCode.TryGetValue(dateValue, out var dataByCode) ? dataByCode : new Dictionary<string, StockDailyData>();
-            var limitUpByCode = limitUpByDateAndCode.TryGetValue(dateValue, out var limitUpLookup) ? limitUpLookup : null;
+            var date = datesToCalcList[dayIndex];
+            var dateValue = date.Date;
 
-            // 报告进度
-            progressCallback?.Invoke(currentDateIndex, totalDates, $"正在计算 {date:yyyy-MM-dd} ({currentDateIndex}/{totalDates})");
+            progressCallback?.Invoke(dayIndex + 1, totalDates, $"正在计算第 {dayIndex + 1}/{totalDates} 天 ({date:yyyy-MM-dd})...");
+
+            // 查询当天的日线数据（只查询需要的字段）
+            var dailyDataForDate = await dbContext.StockDailyData
+                .Where(d => d.TradeDate.Date == dateValue)
+                .Select(d => new { d.StockID, d.ChangePercent, d.Amount, d.TurnoverRate })
+                .ToListAsync();
+
+            // 按股票代码索引
+            var dailyDataByCode = dailyDataForDate.ToDictionary(d => d.StockID);
+
+            // 查询当天的涨停数据（只查询需要的字段）
+            var limitUpForDate = await dbContext.StockLimitUpAnalysis
+                .Where(s => s.analysis_date.Date == dateValue)
+                .Select(s => new { s.code })
+                .ToListAsync();
+
+            var limitUpCodeSet = limitUpForDate.Select(s => s.code).ToHashSet();
+
+            // 计算每个板块的数据
+            var plateDailyDataList = new List<PlateDailyData>();
 
             foreach (var plate in plates)
             {
-                // 从预计算的数据获取成分股
                 if (!plateStockDataByPlateId.TryGetValue(plate.id, out var plateStockData))
                     continue;
 
                 if (!plateStockData.StockCodes.Any()) continue;
 
                 // 从内存获取成分股当天的日线数据
-                var dailyData = new List<StockDailyData>(plateStockData.StockCodesWithPrefix.Count);
+                var dailyData = new List<dynamic>();
                 foreach (var code in plateStockData.StockCodesWithPrefix)
                 {
                     if (dailyDataByCode.TryGetValue(code, out var data))
@@ -272,31 +257,20 @@ public class PlateService
 
                 // 计算板块统计数据
                 var stockCount = dailyData.Count;
-                var avgPctChg = 0m;
-                var totalAmount = 0m;
-                var avgTurnover = 0m;
+                decimal avgPctChg = 0, totalAmount = 0, avgTurnover = 0;
 
-                // 使用for循环提高性能
                 for (int i = 0; i < stockCount; i++)
                 {
                     var d = dailyData[i];
-                    avgPctChg += d.ChangePercent ?? 0;
-                    totalAmount += d.Amount;
-                    avgTurnover += d.TurnoverRate ?? 0;
+                    avgPctChg += (decimal)d.ChangePercent;
+                    totalAmount += (decimal)d.Amount;
+                    avgTurnover += (decimal)d.TurnoverRate;
                 }
                 avgPctChg /= stockCount;
                 avgTurnover /= stockCount;
 
-                // 从内存获取当天涨停数量
-                var limitUpCount = 0;
-                if (limitUpByCode != null)
-                {
-                    foreach (var code in plateStockData.StockCodes)
-                    {
-                        if (limitUpByCode.Contains(code))
-                            limitUpCount++;
-                    }
-                }
+                // 计算涨停数量
+                var limitUpCount = plateStockData.StockCodes.Count(code => limitUpCodeSet.Contains(code));
 
                 // 新增板块日线数据
                 var plateDailyData = new PlateDailyData
@@ -315,16 +289,13 @@ public class PlateService
                 calcCount++;
             }
 
-            // 每个日期批量保存一次，减少数据库操作次数
+            // 保存当天的数据
             if (plateDailyDataList.Any())
             {
                 await dbContext.PlateDailyData.AddRangeAsync(plateDailyDataList);
                 await dbContext.SaveChangesAsync();
-                plateDailyDataList.Clear();
-                ErrorLogger.Log(null, "PlateService.CalcPlateDailyData", $"日期 {date:yyyy-MM-dd} 计算完成: {plateDailyDataList.Count} 个板块");
 
-                // 保存后报告进度
-                progressCallback?.Invoke(currentDateIndex, totalDates, $"完成 {date:yyyy-MM-dd}: {plateDailyDataList.Count} 个板块");
+                progressCallback?.Invoke(dayIndex + 1, totalDates, $"完成第 {dayIndex + 1}/{totalDates} 天 ({date:yyyy-MM-dd}): {plateDailyDataList.Count} 个板块");
             }
         }
 
