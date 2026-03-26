@@ -111,3 +111,44 @@ CREATE TABLE IF NOT EXISTS `stockfavorite` (
   PRIMARY KEY (`Id`),
   UNIQUE KEY `uk_stockcode` (`StockCode`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='自选股表';
+
+-- 8. 板块表
+CREATE TABLE IF NOT EXISTS `plate` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `plate_code` varchar(20) NOT NULL COMMENT '板块代码',
+  `plate_name` varchar(100) NOT NULL COMMENT '板块名称',
+  `plate_type` varchar(20) DEFAULT NULL COMMENT '板块类型',
+  `created_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_plate_code` (`plate_code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='板块表';
+
+-- 9. 板块成分股表
+CREATE TABLE IF NOT EXISTS `plate_stock` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `plate_id` bigint NOT NULL COMMENT '板块ID',
+  `stock_code` varchar(20) NOT NULL COMMENT '股票代码',
+  `stock_name` varchar(100) NOT NULL COMMENT '股票名称',
+  `join_date` date NOT NULL COMMENT '加入日期',
+  `created_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_plate_stock` (`plate_id`,`stock_code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='板块成分股表';
+
+-- 10. 板块日线数据表
+CREATE TABLE IF NOT EXISTS `plate_daily_data` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `plate_id` bigint NOT NULL COMMENT '板块ID',
+  `trade_date` date NOT NULL COMMENT '交易日期',
+  `stock_count` int NOT NULL COMMENT '股票数量',
+  `limit_up_count` int NOT NULL DEFAULT '0' COMMENT '涨停数量',
+  `avg_pct_chg` decimal(10,4) DEFAULT NULL COMMENT '平均涨跌幅',
+  `total_amount` decimal(18,2) DEFAULT NULL COMMENT '总成交额',
+  `avg_turnover` decimal(10,4) DEFAULT NULL COMMENT '平均换手率',
+  `created_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_plate_date` (`plate_id`,`trade_date`),
+  KEY `idx_trade_date` (`trade_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='板块日线数据表';

@@ -4,6 +4,7 @@ using StockAnalysisSystem.Core.Entities;
 using StockAnalysisSystem.Core.Indicators;
 using StockAnalysisSystem.Core.RealtimeData;
 using StockAnalysisSystem.Core.Repositories;
+using StockAnalysisSystem.Core.Services;
 
 namespace StockAnalysisSystem.UI.Forms;
 
@@ -20,6 +21,8 @@ public partial class DataManagerForm : Form
     private Button _btnCalcIndicators = null!;
     private Button _btnTestDeepSeek = null!;
     private Button _btnSyncRealtime = null!;
+    private Button _btnSyncPlate = null!;
+    private Button _btnCalcPlateDaily = null!;
     private ProgressBar _progressBar = null!;
     private TextBox _txtLog = null!;
 
@@ -44,7 +47,7 @@ public partial class DataManagerForm : Form
 
         // 统计信息面板
         var statsPanel = new GroupBox { Text = "数据统计", Dock = DockStyle.Top, Height = 120, Padding = new Padding(10) };
-        
+
         _lblStockCount = new Label { Text = "股票数量: 加载中...", Left = 20, Top = 25, Width = 300 };
         _lblLatestDate = new Label { Text = "最新交易日: 加载中...", Left = 20, Top = 50, Width = 300 };
         _lblIndicatorCount = new Label { Text = "指标数据量: 加载中...", Left = 20, Top = 75, Width = 300 };
@@ -55,7 +58,7 @@ public partial class DataManagerForm : Form
         _btnTestDeepSeek = new Button { Text = "测试DeepSeek", Left = 540, Top = 20, Width = 120, Height = 30 };
         _btnTestDeepSeek.Click += BtnTestDeepSeek_Click;
 
-        _btnSyncRealtime = new Button { Text = "同步实时行情", Left = 400, Top = 55, Width = 260, Height = 30, BackColor = Color.LightGreen };
+        _btnSyncRealtime = new Button { Text = "同步实时行情", Left = 400, Top = 55, Width = 120, Height = 30, BackColor = Color.LightGreen };
         _btnSyncRealtime.Click += BtnSyncRealtime_Click;
 
         _progressBar = new ProgressBar { Left = 400, Top = 85, Width = 260, Height = 25 };
@@ -66,12 +69,23 @@ public partial class DataManagerForm : Form
             _btnSyncRealtime, _progressBar
         });
 
+        // 板块管理面板
+        var platePanel = new GroupBox { Text = "板块数据管理", Dock = DockStyle.Top, Height = 70, Padding = new Padding(10) };
+
+        _btnSyncPlate = new Button { Text = "同步板块数据", Left = 20, Top = 22, Width = 120, Height = 28 };
+        _btnSyncPlate.Click += BtnSyncPlate_Click;
+
+        _btnCalcPlateDaily = new Button { Text = "计算板块日线", Left = 150, Top = 22, Width = 120, Height = 28 };
+        _btnCalcPlateDaily.Click += BtnCalcPlateDaily_Click;
+
+        platePanel.Controls.AddRange(new Control[] { _btnSyncPlate, _btnCalcPlateDaily });
+
         // 日志面板
         var logPanel = new GroupBox { Text = "操作日志", Dock = DockStyle.Fill };
         _txtLog = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical };
         logPanel.Controls.Add(_txtLog);
 
-        Controls.AddRange(new Control[] { logPanel, statsPanel });
+        Controls.AddRange(new Control[] { logPanel, platePanel, statsPanel });
 
         Text = "数据管理";
     }
@@ -234,6 +248,54 @@ public partial class DataManagerForm : Form
         finally
         {
             _btnSyncRealtime.Enabled = true;
+        }
+    }
+
+    private async void BtnSyncPlate_Click(object? sender, EventArgs e)
+    {
+        _btnSyncPlate.Enabled = false;
+        Log("开始同步板块数据...");
+
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var plateService = scope.ServiceProvider.GetRequiredService<PlateService>();
+
+            var count = await plateService.SyncPlatesFromLimitUpAsync();
+
+            Log($"板块数据同步完成: 新增 {count} 个成分股");
+        }
+        catch (Exception ex)
+        {
+            Log($"同步板块数据失败: {ex.Message}");
+        }
+        finally
+        {
+            _btnSyncPlate.Enabled = true;
+        }
+    }
+
+    private async void BtnCalcPlateDaily_Click(object? sender, EventArgs e)
+    {
+        _btnCalcPlateDaily.Enabled = false;
+        Log("开始计算板块日线数据（增量计算）...");
+
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var plateService = scope.ServiceProvider.GetRequiredService<PlateService>();
+
+            var count = await plateService.CalcPlateDailyDataAsync();
+
+            Log($"板块日线计算完成: 共计算 {count} 条数据");
+        }
+        catch (Exception ex)
+        {
+            Log($"计算板块日线失败: {ex.Message}");
+        }
+        finally
+        {
+            _btnCalcPlateDaily.Enabled = true;
         }
     }
 

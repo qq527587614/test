@@ -18,6 +18,11 @@ public class AppDbContext : DbContext
     public DbSet<StockDailyData> StockDailyData { get; set; }
     public DbSet<StockLimitUpAnalysis> StockLimitUpAnalysis { get; set; }
 
+    // 板块相关表
+    public DbSet<Plate> Plates { get; set; }
+    public DbSet<PlateStock> PlateStocks { get; set; }
+    public DbSet<PlateDailyData> PlateDailyData { get; set; }
+
     // 新增表
     public DbSet<Strategy> Strategies { get; set; }
     public DbSet<BacktestTask> BacktestTasks { get; set; }
@@ -82,6 +87,25 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<StockFavorite>(entity =>
         {
             entity.HasIndex(e => e.StockCode).IsUnique().HasDatabaseName("uk_stockcode");
+        });
+
+        // Plate 配置
+        modelBuilder.Entity<Plate>(entity =>
+        {
+            entity.HasIndex(e => e.plate_code).IsUnique().HasDatabaseName("uk_plate_code");
+        });
+
+        // PlateStock 配置
+        modelBuilder.Entity<PlateStock>(entity =>
+        {
+            entity.HasIndex(e => new { e.plate_id, e.stock_code }).IsUnique().HasDatabaseName("uk_plate_stock");
+        });
+
+        // PlateDailyData 配置
+        modelBuilder.Entity<PlateDailyData>(entity =>
+        {
+            entity.HasIndex(e => new { e.plate_id, e.trade_date }).IsUnique().HasDatabaseName("uk_plate_date");
+            entity.HasIndex(e => e.trade_date).HasDatabaseName("idx_trade_date");
         });
     }
 }

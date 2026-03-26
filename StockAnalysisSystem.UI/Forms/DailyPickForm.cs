@@ -13,6 +13,7 @@ public partial class DailyPickForm : Form
     private readonly IDailyPickRepository _pickRepo;
     private readonly IServiceProvider _serviceProvider;
     private readonly StockFavoriteService _favoriteService;
+    private bool _isHistoryMode = false;  // 是否为历史模式（只查询不选股）
 
     public DailyPickForm(DailyPicker picker, IDailyPickRepository pickRepo, IServiceProvider serviceProvider, StockFavoriteService favoriteService)
     {
@@ -21,7 +22,7 @@ public partial class DailyPickForm : Form
         _serviceProvider = serviceProvider;
         _favoriteService = favoriteService;
         InitializeComponent();
-        
+
         // 添加DataGridView列
         _dataGridView.Columns.Add("StockCode", "股票代码");
         _dataGridView.Columns.Add("StockName", "股票名称");
@@ -46,7 +47,7 @@ public partial class DailyPickForm : Form
         _dataGridView.CellContentClick += DataGridView_CellContentClick;
 
         _dataGridView.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
-        
+
         // 添加右键菜单
         var contextMenu = new ContextMenuStrip();
         contextMenu.Items.Add("查看K线", null, (s, e) => MessageBox.Show("K线功能待实现"));
@@ -54,11 +55,46 @@ public partial class DailyPickForm : Form
         contextMenu.Items.Add("-");
         contextMenu.Items.Add("导出选中", null, ExportSelected);
         _dataGridView.ContextMenuStrip = contextMenu;
-        
-        LoadData();
+
+        // 添加日期选择器事件
+        _dtpDate.ValueChanged += async (s, e) => await LoadDataAsync();
+
+        // 在窗体加载完成后再加载数据
+        this.Load += DailyPickForm_Load;
     }
 
-    private async void LoadData()
+    /// <summary>
+    /// 设置表单模式
+    /// </summary>
+    /// <param name="isHistoryMode">是否为历史模式（true=只查询历史数据，false=允许刷新选股）</param>
+    public void SetMode(bool isHistoryMode)
+    {
+        _isHistoryMode = isHistoryMode;
+        
+        if (isHistoryMode)
+        {
+            // 历史模式：按钮可点击，但只刷新历史数据
+           // _btnRefresh.Enabled = true;
+            _btnRefresh.Text = "刷新历史";
+            _btnRefresh.BackColor = System.Drawing.Color.LightGray;
+            _chkDeepSeek.Enabled = false;
+        }
+        else
+        {
+            // 每日选股模式：按钮可点击，执行选股
+            _btnRefresh.Enabled = true;
+            _btnRefresh.Text = "刷新选股";
+            _btnRefresh.BackColor = System.Drawing.Color.LightBlue;
+            _chkDeepSeek.Enabled = true;
+        }
+    }
+
+    private async void DailyPickForm_Load(object? sender, EventArgs e)
+    {
+        await LoadDataAsync();
+    }
+
+    private async Task LoadDataAsync()
     {
         try
         {
@@ -73,6 +109,14 @@ public partial class DailyPickForm : Form
 
     private async void BtnRefresh_Click(object? sender, EventArgs e)
     {
+        if (_isHistoryMode)
+        {
+            // 历史模式：只刷新历史数据，不执行选股
+            await LoadDataAsync();
+            return;
+        }
+
+        // 每日选股模式：执行选股
         _btnRefresh.Enabled = false;
         _btnRefresh.Text = "选股中...";
         _dataGridView.Rows.Clear();
@@ -94,7 +138,7 @@ public partial class DailyPickForm : Form
         finally
         {
             _btnRefresh.Enabled = true;
-            _btnRefresh.Text = "刷新选股";
+            _btnRefresh.Text = _isHistoryMode ? "刷新历史" : "刷新选股";
         }
     }
 

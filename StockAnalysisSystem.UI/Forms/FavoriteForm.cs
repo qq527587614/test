@@ -212,15 +212,16 @@ public partial class FavoriteForm : Form
                 var turnoverRate = f.TurnoverRate?.ToString("F2") ?? "-";
                 var currentPrice = f.CurrentPrice?.ToString("F2") ?? "-";
 
-                var rowIndex = _dgvFavorites.Rows.Add(
-                    f.StockCode,
-                    f.StockName ?? "-",
-                    currentPrice,
-                    changePercent,
-                    turnoverRate,
-                    f.AddedDate.ToString("yyyy-MM-dd"),
-                    f.Remark ?? ""
-                );
+                var rowIndex = _dgvFavorites.Rows.Add();
+
+                // 按列名显式设置每个单元格的值
+                _dgvFavorites.Rows[rowIndex].Cells["StockCode"].Value = f.StockCode;
+                _dgvFavorites.Rows[rowIndex].Cells["StockName"].Value = f.StockName ?? "-";
+                _dgvFavorites.Rows[rowIndex].Cells["CurrentPrice"].Value = currentPrice;
+                _dgvFavorites.Rows[rowIndex].Cells["ChangePercent"].Value = changePercent;
+                _dgvFavorites.Rows[rowIndex].Cells["TurnoverRate"].Value = turnoverRate;
+                _dgvFavorites.Rows[rowIndex].Cells["AddedDate"].Value = f.AddedDate.ToString("yyyy-MM-dd");
+                _dgvFavorites.Rows[rowIndex].Cells["Remark"].Value = f.Remark ?? "";
 
                 // 设置涨跌幅颜色
                 if (f.ChangePercent.HasValue)

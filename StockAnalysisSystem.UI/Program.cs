@@ -59,6 +59,7 @@ static class Program
             services.AddTransient<DailyPickForm>();
             services.AddTransient<DataManagerForm>();
             services.AddTransient<FavoriteForm>();
+            services.AddTransient<PlateAnalysisForm>();
 
             // 构建服务提供者
             var serviceProvider = services.BuildServiceProvider();

@@ -62,7 +62,9 @@ public partial class MainForm : Form
         // 选股菜单
         var pickMenu = new ToolStripMenuItem("选股(&P)");
         pickMenu.DropDownItems.Add("每日选股(&D)", null, ShowDailyPickForm);
-        pickMenu.DropDownItems.Add("选股历史(&H)", null, ShowDailyPickForm);
+        pickMenu.DropDownItems.Add("选股历史(&H)", null, ShowPickHistoryForm);
+        pickMenu.DropDownItems.Add(new ToolStripSeparator());
+        pickMenu.DropDownItems.Add("板块分析(&B)", null, ShowPlateAnalysisForm);
         menuStrip.Items.Add(pickMenu);
 
         // 自选股菜单
@@ -132,6 +134,14 @@ public partial class MainForm : Form
     private void ShowDailyPickForm(object? sender, EventArgs e)
     {
         var form = _serviceProvider.GetRequiredService<DailyPickForm>();
+        form.SetMode(false);  // 每日选股模式：可以刷新选股
+        ShowInMainPanel(form);
+    }
+
+    private void ShowPickHistoryForm(object? sender, EventArgs e)
+    {
+        var form = _serviceProvider.GetRequiredService<DailyPickForm>();
+        form.SetMode(true);   // 选股历史模式：只查询历史数据
         ShowInMainPanel(form);
     }
 
@@ -144,6 +154,12 @@ public partial class MainForm : Form
     private void ShowFavoriteForm(object? sender, EventArgs e)
     {
         var form = _serviceProvider.GetRequiredService<FavoriteForm>();
+        ShowInMainPanel(form);
+    }
+
+    private void ShowPlateAnalysisForm(object? sender, EventArgs e)
+    {
+        var form = _serviceProvider.GetRequiredService<PlateAnalysisForm>();
         ShowInMainPanel(form);
     }
 

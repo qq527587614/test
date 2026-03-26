@@ -62,6 +62,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<DeepSeek.DeepSeekClient>();
         services.AddScoped<TencentRealtimeService>();
         services.AddScoped<StockFavoriteService>();
+        services.AddScoped<PlateService>();
+        services.AddDbContextFactory<AppDbContext>();
 
         return services;
     }

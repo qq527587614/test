@@ -58,13 +58,7 @@ public class StockRepository : IStockRepository
 /// </summary>
 public class StockDailyDataRepository : IStockDailyDataRepository
 {
-    private readonly AppDbContext _context;
-    private readonly IDbContextFactory<AppDbContext>? _contextFactory;
-
-    public StockDailyDataRepository(AppDbContext context)
-    {
-        _context = context;
-    }
+    private readonly IDbContextFactory<AppDbContext> _contextFactory;
 
     public StockDailyDataRepository(IDbContextFactory<AppDbContext> contextFactory)
     {
@@ -73,7 +67,7 @@ public class StockDailyDataRepository : IStockDailyDataRepository
 
     private AppDbContext GetContext()
     {
-        return _contextFactory != null ? _contextFactory.CreateDbContext() : _context;
+        return _contextFactory.CreateDbContext();
     }
 
     public async Task<List<StockDailyData>> GetByStockIdAsync(string stockId, DateTime? startDate = null, DateTime? endDate = null)
@@ -105,7 +99,7 @@ public class StockDailyDataRepository : IStockDailyDataRepository
     {
         var context = GetContext();
         return await context.StockDailyData
-            .Where(d => d.TradeDate == date)
+            .Where(d => d.TradeDate.Date == date.Date)
             .ToListAsync();
     }
 
@@ -172,13 +166,7 @@ public class StockDailyDataRepository : IStockDailyDataRepository
 /// </summary>
 public class IndicatorRepository : IIndicatorRepository
 {
-    private readonly AppDbContext _context;
-    private readonly IDbContextFactory<AppDbContext>? _contextFactory;
-
-    public IndicatorRepository(AppDbContext context)
-    {
-        _context = context;
-    }
+    private readonly IDbContextFactory<AppDbContext> _contextFactory;
 
     public IndicatorRepository(IDbContextFactory<AppDbContext> contextFactory)
     {
@@ -187,7 +175,7 @@ public class IndicatorRepository : IIndicatorRepository
 
     private AppDbContext GetContext()
     {
-        return _contextFactory != null ? _contextFactory.CreateDbContext() : _context;
+        return _contextFactory.CreateDbContext();
     }
 
     public async Task<List<StockDailyIndicator>> GetByStockIdAsync(string stockId, DateTime? startDate = null, DateTime? endDate = null)
@@ -226,7 +214,7 @@ public class IndicatorRepository : IIndicatorRepository
     {
         var context = GetContext();
         return await context.StockDailyIndicators
-            .Where(i => i.TradeDate == date)
+            .Where(i => i.TradeDate.Date == date.Date)
             .ToListAsync();
     }
 
@@ -460,7 +448,7 @@ public class DailyPickRepository : IDailyPickRepository
     {
         return await _context.DailyPicks
             .Include(d => d.Strategy)
-            .Where(d => d.TradeDate == date)
+            .Where(d => d.TradeDate.Date == date.Date)
             .OrderByDescending(d => d.FinalScore)
             .ToListAsync();
     }
@@ -468,7 +456,7 @@ public class DailyPickRepository : IDailyPickRepository
     public async Task<List<DailyPickEntity>> GetByDateAndStrategyAsync(DateTime date, int strategyId)
     {
         return await _context.DailyPicks
-            .Where(d => d.TradeDate == date && d.StrategyId == strategyId)
+            .Where(d => d.TradeDate.Date == date.Date && d.StrategyId == strategyId)
             .OrderByDescending(d => d.FinalScore)
             .ToListAsync();
     }
