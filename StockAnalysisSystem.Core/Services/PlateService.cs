@@ -182,33 +182,25 @@ public class PlateService
             return 0;
         }
 
-        progressCallback?.Invoke(4, 100, $"共需计算 {datesToCalc.Count} 个日期，正在预加载板块成分股...");
-        // 预加载所有板块成分股关系
-        var allPlateStocks = await dbContext.PlateStocks
-            .Include(ps => ps.Plate)
-            .ToListAsync();
-
-        // 按日期排序
+        progressCallback?.Invoke(4, 100, $"共需计算 {datesToCalc.Count} 个日期");
         var datesToCalcList = datesToCalc.OrderBy(d => d).ToList();
         var totalDates = datesToCalcList.Count;
 
-        // 预计算每个板块的成分股列表（带前缀和不带前缀）
-        var plateStockDataByPlateId = allPlateStocks
+        // 预加载所有板块成分股关系
+        var plateStocks = await dbContext.PlateStocks
+            .ToListAsync();
+
+        // 按板块ID分组成分股
+        var plateStocksByPlateId = plateStocks
             .GroupBy(ps => ps.plate_id)
             .ToDictionary(
                 g => g.Key,
-                g => new
-                {
-                    StockCodes = g.Select(ps => ps.stock_code).ToList(),
-                    StockCodesWithPrefix = g.Select(ps =>
-                        ps.stock_code.StartsWith("6") ? "sh" + ps.stock_code : "sz" + ps.stock_code
-                    ).ToList()
-                }
+                g => g.Select(ps => ps.stock_code).ToList()
             );
 
         int calcCount = 0;
 
-        // 逐天计算，每天单独查询和处理，避免一次性加载大量数据
+        // 逐天计算
         for (int dayIndex = 0; dayIndex < totalDates; dayIndex++)
         {
             var date = datesToCalcList[dayIndex];
@@ -216,52 +208,48 @@ public class PlateService
 
             progressCallback?.Invoke(dayIndex + 1, totalDates, $"正在计算第 {dayIndex + 1}/{totalDates} 天 ({date:yyyy-MM-dd})...");
 
-            // 查询当天的日线数据（只查询需要的字段）
-            var dailyDataForDate = await dbContext.StockDailyData
+            // 查询当天的股票日线数据
+            var dailyData = await dbContext.StockDailyData
                 .Where(d => d.TradeDate.Date == dateValue)
                 .Select(d => new { d.StockID, d.ChangePercent, d.Amount, d.TurnoverRate })
                 .ToListAsync();
 
             // 按股票代码索引
-            var dailyDataByCode = dailyDataForDate.ToDictionary(d => d.StockID);
+            var dailyDataByCode = dailyData.ToDictionary(d => d.StockID);
 
-            // 查询当天的涨停数据（只查询需要的字段）
-            var limitUpForDate = await dbContext.StockLimitUpAnalysis
-                .Where(s => s.analysis_date.Date == dateValue)
-                .Select(s => new { s.code })
-                .ToListAsync();
-
-            var limitUpCodeSet = limitUpForDate.Select(s => s.code).ToHashSet();
-
-            // 计算每个板块的数据
             var plateDailyDataList = new List<PlateDailyData>();
 
             foreach (var plate in plates)
             {
-                if (!plateStockDataByPlateId.TryGetValue(plate.id, out var plateStockData))
+                if (!plateStocksByPlateId.TryGetValue(plate.id, out var stockCodes))
                     continue;
 
-                if (!plateStockData.StockCodes.Any()) continue;
+                if (!stockCodes.Any()) continue;
+
+                // 股票代码需要加前缀才能匹配日线表
+                var stockCodesWithPrefix = stockCodes
+                    .Select(code => code.StartsWith("6") ? "sh" + code : "sz" + code)
+                    .ToHashSet();
 
                 // 从内存获取成分股当天的日线数据
-                var dailyData = new List<dynamic>();
-                foreach (var code in plateStockData.StockCodesWithPrefix)
+                var dailyDataForPlate = new List<dynamic>();
+                foreach (var code in stockCodesWithPrefix)
                 {
                     if (dailyDataByCode.TryGetValue(code, out var data))
                     {
-                        dailyData.Add(data);
+                        dailyDataForPlate.Add(data);
                     }
                 }
 
-                if (dailyData.Count == 0) continue;
+                if (dailyDataForPlate.Count == 0) continue;
 
                 // 计算板块统计数据
-                var stockCount = dailyData.Count;
+                var stockCount = dailyDataForPlate.Count;
                 decimal avgPctChg = 0, totalAmount = 0, avgTurnover = 0;
 
                 for (int i = 0; i < stockCount; i++)
                 {
-                    var d = dailyData[i];
+                    var d = dailyDataForPlate[i];
                     avgPctChg += (decimal)d.ChangePercent;
                     totalAmount += (decimal)d.Amount;
                     avgTurnover += (decimal)d.TurnoverRate;
@@ -269,34 +257,43 @@ public class PlateService
                 avgPctChg /= stockCount;
                 avgTurnover /= stockCount;
 
-                // 计算涨停数量
-                var limitUpCount = plateStockData.StockCodes.Count(code => limitUpCodeSet.Contains(code));
+                // 查询该板块当天的日线数据是否已存在
+                var existingPlateDaily = await dbContext.PlateDailyData
+                    .FirstOrDefaultAsync(pd => pd.plate_id == plate.id && pd.trade_date.Date == dateValue);
 
-                // 新增板块日线数据
-                var plateDailyData = new PlateDailyData
+                if (existingPlateDaily != null)
                 {
-                    plate_id = plate.id,
-                    trade_date = date,
-                    stock_count = stockCount,
-                    limit_up_count = limitUpCount,
-                    avg_pct_chg = avgPctChg,
-                    total_amount = totalAmount,
-                    avg_turnover = avgTurnover,
-                    created_time = DateTime.Now,
-                    updated_time = DateTime.Now
-                };
-                plateDailyDataList.Add(plateDailyData);
+                    // 更新
+                    existingPlateDaily.stock_count = stockCount;
+                    existingPlateDaily.limit_up_count = 0;
+                    existingPlateDaily.avg_pct_chg = avgPctChg;
+                    existingPlateDaily.total_amount = totalAmount;
+                    existingPlateDaily.avg_turnover = avgTurnover;
+                    existingPlateDaily.updated_time = DateTime.Now;
+                }
+                else
+                {
+                    // 新增
+                    var plateDailyData = new PlateDailyData
+                    {
+                        plate_id = plate.id,
+                        trade_date = date,
+                        stock_count = stockCount,
+                        limit_up_count = 0,
+                        avg_pct_chg = avgPctChg,
+                        total_amount = totalAmount,
+                        avg_turnover = avgTurnover,
+                        created_time = DateTime.Now,
+                        updated_time = DateTime.Now
+                    };
+                    dbContext.PlateDailyData.Add(plateDailyData);
+                }
                 calcCount++;
             }
 
-            // 保存当天的数据
-            if (plateDailyDataList.Any())
-            {
-                await dbContext.PlateDailyData.AddRangeAsync(plateDailyDataList);
-                await dbContext.SaveChangesAsync();
+            await dbContext.SaveChangesAsync();
 
-                progressCallback?.Invoke(dayIndex + 1, totalDates, $"完成第 {dayIndex + 1}/{totalDates} 天 ({date:yyyy-MM-dd}): {plateDailyDataList.Count} 个板块");
-            }
+            progressCallback?.Invoke(dayIndex + 1, totalDates, $"完成第 {dayIndex + 1}/{totalDates} 天 ({date:yyyy-MM-dd}): 计算了 {plates.Count} 个板块");
         }
 
         ErrorLogger.Log(null, "PlateService.CalcPlateDailyData", $"计算完成: 共计算 {calcCount} 条板块日线数据");
