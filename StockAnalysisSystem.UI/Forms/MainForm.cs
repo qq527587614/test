@@ -67,6 +67,11 @@ public partial class MainForm : Form
         pickMenu.DropDownItems.Add("板块分析(&B)", null, ShowPlateAnalysisForm);
         menuStrip.Items.Add(pickMenu);
 
+        // K线图菜单
+        var klineMenu = new ToolStripMenuItem("K线图(&K)");
+        klineMenu.DropDownItems.Add("查看K线(&V)", null, ShowKLineForm);
+        menuStrip.Items.Add(klineMenu);
+
         // 自选股菜单
         var favoriteMenu = new ToolStripMenuItem("自选股(&F)");
         favoriteMenu.DropDownItems.Add("我的自选(&M)", null, ShowFavoriteForm);
@@ -161,6 +166,29 @@ public partial class MainForm : Form
     {
         var form = _serviceProvider.GetRequiredService<PlateAnalysisForm>();
         ShowInMainPanel(form);
+    }
+
+    private void ShowKLineForm(object? sender, EventArgs e)
+    {
+        var stockCode = InputBox.Show("请输入股票代码", "股票代码", "sh600000");
+        if (string.IsNullOrWhiteSpace(stockCode))
+        {
+            return;
+        }
+
+        // 验证股票代码格式
+        stockCode = stockCode.Trim().ToLower();
+        if (!stockCode.StartsWith("sh") && !stockCode.StartsWith("sz"))
+        {
+            MessageBox.Show("股票代码格式错误，请使用 sh 或 sz 开头，如 sh600000 或 sz000001",
+                "格式错误", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        using var scope = _serviceProvider.CreateScope();
+        var kLineService = scope.ServiceProvider.GetRequiredService<Core.Services.IKLineDataService>();
+        var form = new KLineForm(_serviceProvider, kLineService, stockCode);
+        form.Show();
     }
 
     private async void QuickPick(object? sender, EventArgs e)

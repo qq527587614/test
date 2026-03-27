@@ -141,6 +141,9 @@ public partial class FavoriteForm : Form
         // 绑定单元格点击事件
         _dgvFavorites.CellContentClick += DgvFavorites_CellContentClick;
 
+        // 绑定双击事件 - 打开K线图
+        _dgvFavorites.CellDoubleClick += DgvFavorites_CellDoubleClick;
+
         // 无数据提示
         _lblNoData = new Label
         {
@@ -180,6 +183,22 @@ public partial class FavoriteForm : Form
             using var chartForm = new MinuteChartForm(stockCode, stockName, price, change);
             chartForm.ShowDialog(this);
         }
+    }
+
+    private void DgvFavorites_CellDoubleClick(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (e.RowIndex < 0) return;
+
+        var row = _dgvFavorites.Rows[e.RowIndex];
+        var stockCode = row.Cells["StockCode"].Value?.ToString();
+
+        if (string.IsNullOrEmpty(stockCode)) return;
+
+        // 打开K线图窗口
+        using var scope = _serviceProvider.CreateScope();
+        var kLineService = scope.ServiceProvider.GetRequiredService<Core.Services.IKLineDataService>();
+        using var kLineForm = new KLineForm(_serviceProvider, kLineService, stockCode);
+        kLineForm.ShowDialog(this);
     }
 
     private async void LoadDataAsync()

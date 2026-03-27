@@ -63,6 +63,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<TencentRealtimeService>();
         services.AddScoped<StockFavoriteService>();
         services.AddScoped<PlateService>();
+        services.AddScoped<IKLineDataService, KLineDataService>();
         services.AddDbContextFactory<AppDbContext>();
 
         return services;
