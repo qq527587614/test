@@ -63,7 +63,7 @@ public partial class KLineForm : Form
         {
             UpdateStatus("正在加载K线数据...");
 
-            var kLineData = await _kLineDataService.GetKLineDataAsync(_stockCode, _currentPeriod, 500);
+            var kLineData = await _kLineDataService.GetKLineDataAsync(_stockCode, _currentPeriod, 100);
 
             if (kLineData == null || kLineData.Count == 0)
             {

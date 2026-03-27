@@ -20,7 +20,7 @@ public class KLineDataService : IKLineDataService
     /// <summary>
     /// 获取K线数据
     /// </summary>
-    public async Task<List<KLineData>> GetKLineDataAsync(string stockCode, PeriodType period, int count = 500)
+    public async Task<List<KLineData>> GetKLineDataAsync(string stockCode, PeriodType period, int count = 100)
     {
         using var dbContext = await _dbContextFactory.CreateDbContextAsync();
 
@@ -39,7 +39,7 @@ public class KLineDataService : IKLineDataService
     private async Task<List<KLineData>> GetDailyKLineDataAsync(AppDbContext dbContext, string stockCode, int count)
     {
         var dailyData = await dbContext.StockDailyData
-            .Where(d => d.StockID == stockCode)
+            .Where(d => d.StockCode == stockCode)
             .OrderByDescending(d => d.TradeDate)
             .Take(count)
             .OrderBy(d => d.TradeDate)
@@ -62,7 +62,7 @@ public class KLineDataService : IKLineDataService
     private async Task<List<KLineData>> GetWeeklyKLineDataAsync(AppDbContext dbContext, string stockCode, int count)
     {
         var dailyData = await dbContext.StockDailyData
-            .Where(d => d.StockID == stockCode)
+            .Where(d => d.StockCode == stockCode)
             .OrderByDescending(d => d.TradeDate)
             .Take(count * 7)
             .ToListAsync();
@@ -95,7 +95,7 @@ public class KLineDataService : IKLineDataService
     private async Task<List<KLineData>> GetMonthlyKLineDataAsync(AppDbContext dbContext, string stockCode, int count)
     {
         var dailyData = await dbContext.StockDailyData
-            .Where(d => d.StockID == stockCode)
+            .Where(d => d.StockCode == stockCode)
             .OrderByDescending(d => d.TradeDate)
             .Take(count * 30)
             .ToListAsync();

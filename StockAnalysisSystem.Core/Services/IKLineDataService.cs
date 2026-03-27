@@ -12,7 +12,7 @@ public interface IKLineDataService
     /// </summary>
     /// <param name="stockCode">股票代码（如 "sh600000"）</param>
     /// <param name="period">周期类型</param>
-    /// <param name="count">获取数据条数（默认500条）</param>
+    /// <param name="count">获取数据条数（默认100条）</param>
     /// <returns>K线数据列表</returns>
-    Task<List<KLineData>> GetKLineDataAsync(string stockCode, PeriodType period, int count = 500);
+    Task<List<KLineData>> GetKLineDataAsync(string stockCode, PeriodType period, int count = 100);
 }

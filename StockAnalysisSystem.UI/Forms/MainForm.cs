@@ -178,12 +178,12 @@ public partial class MainForm : Form
 
         // 验证股票代码格式
         stockCode = stockCode.Trim().ToLower();
-        if (!stockCode.StartsWith("sh") && !stockCode.StartsWith("sz"))
-        {
-            MessageBox.Show("股票代码格式错误，请使用 sh 或 sz 开头，如 sh600000 或 sz000001",
-                "格式错误", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
+        //if (!stockCode.StartsWith("sh") && !stockCode.StartsWith("sz"))
+        //{
+        //    MessageBox.Show("股票代码格式错误，请使用 sh 或 sz 开头，如 sh600000 或 sz000001",
+        //        "格式错误", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        //    return;
+        //}
 
         using var scope = _serviceProvider.CreateScope();
         var kLineService = scope.ServiceProvider.GetRequiredService<Core.Services.IKLineDataService>();
