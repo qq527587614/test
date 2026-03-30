@@ -94,6 +94,7 @@ public partial class KLineForm : Form
         var highs = kLineData.Select(d => (double)d.High).ToArray();
         var lows = kLineData.Select(d => (double)d.Low).ToArray();
         var closes = kLineData.Select(d => (double)d.Close).ToArray();
+        var volumes = kLineData.Select(d => (double)d.Volume / 1000000.0).ToArray(); // 转换为百万单位
 
         // 添加收盘价线（散点图）
         var closeLine = _plotControl.Plot.Add.Scatter(dates, closes);
@@ -122,8 +123,23 @@ public partial class KLineForm : Form
         lowLine.MarkerSize = 1;
         lowLine.LegendText = "最低价";
 
+        // 添加成交量柱状图
+        var volumeColors = kLineData.Select(d =>
+            d.Close >= d.Open ? new ScottPlot.Color(255, 0, 0) : new ScottPlot.Color(0, 255, 0)
+        ).ToArray();
+
+        for (int i = 0; i < dates.Length; i++)
+        {
+            var bar = _plotControl.Plot.Add.Bar(dates[i], volumes[i]);
+            bar.Color = volumeColors[i];
+            bar.LegendText = string.Empty;
+            bar.Label = string.Empty;
+        }
+
         // 配置坐标轴
         _plotControl.Plot.Axes.DateTimeTicksBottom();
+        _plotControl.Plot.XLabel("日期");
+        _plotControl.Plot.YLabel("价格/成交量");
 
         // 刷新图表
         _plotControl.Refresh();

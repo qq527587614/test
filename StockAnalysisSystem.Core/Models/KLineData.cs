@@ -34,4 +34,9 @@ public class KLineData
     /// 成交量
     /// </summary>
     public decimal Volume { get; set; }
+
+    /// <summary>
+    /// 股票名称
+    /// </summary>
+    public string StockName { get; set; } = "";
 }
