@@ -1,19 +1,23 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using StockAnalysisSystem.Core.DailyPick;
 using StockAnalysisSystem.Core.Entities;
 using StockAnalysisSystem.Core.Repositories;
+using StockAnalysisSystem.Core.RealtimeData;
 using StockAnalysisSystem.Core.Services;
 using StockAnalysisSystem.Core.Utils;
 
 namespace StockAnalysisSystem.UI.Forms;
 
-public partial class DailyPickForm : Form
+    public partial class DailyPickForm : Form
 {
     private readonly DailyPicker _picker;
     private readonly IDailyPickRepository _pickRepo;
     private readonly IServiceProvider _serviceProvider;
     private readonly StockFavoriteService _favoriteService;
+    private readonly TencentRealtimeService _realtimeService;
     private bool _isHistoryMode = false;  // 是否为历史模式（只查询不选股）
+    private Dictionary<string, (decimal Price, decimal ChangePercent)> _todayPriceDict = new(); // 今日行情数据缓存
 
     public DailyPickForm(DailyPicker picker, IDailyPickRepository pickRepo, IServiceProvider serviceProvider, StockFavoriteService favoriteService)
     {
@@ -21,6 +25,7 @@ public partial class DailyPickForm : Form
         _pickRepo = pickRepo;
         _serviceProvider = serviceProvider;
         _favoriteService = favoriteService;
+        _realtimeService = serviceProvider.GetRequiredService<TencentRealtimeService>();
         InitializeComponent();
 
         // 添加DataGridView列
@@ -33,6 +38,8 @@ public partial class DailyPickForm : Form
         _dataGridView.Columns.Add("FinalScore", "最终得分");
         _dataGridView.Columns.Add("LimitUpCount", "历史涨停次数");
         _dataGridView.Columns.Add("LimitUpPlates", "历史涨停板块");
+        _dataGridView.Columns.Add("TodayChangePercent", "今日涨幅(%)");
+        _dataGridView.Columns.Add("TodayPrice", "今日价格");
 
         // 添加操作列（按钮）
         var btnColumn = new DataGridViewButtonColumn
@@ -100,10 +107,60 @@ public partial class DailyPickForm : Form
         {
             var results = await _picker.GetHistoryAsync(_dtpDate.Value);
             DisplayResults(results);
+
+            // 获取今日行情数据
+            await LoadTodayRealtimeDataAsync(results);
         }
         catch (Exception ex)
         {
             MessageBox.Show($"加载数据失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            _btnRefresh.Enabled = true;
+            _btnRefresh.Text = _isHistoryMode ? "刷新历史" : "刷新选股";
+            _btnRefresh.BackColor = _isHistoryMode ? System.Drawing.Color.LightGray : System.Drawing.Color.LightBlue;
+            _chkDeepSeek.Enabled = !_isHistoryMode;
+        }
+    }
+
+    /// <summary>
+    /// 加载今日实时行情数据
+    /// </summary>
+    private async Task LoadTodayRealtimeDataAsync(List<DailyPickResult> results)
+    {
+        if (results == null || results.Count == 0) return;
+
+        try
+        {
+            var stockCodes = results.Select(r => r.StockCode).Distinct().ToList();
+            var priceData = await _realtimeService.GetRealtimeDataAsync(stockCodes);
+
+            _todayPriceDict.Clear();
+            foreach (var data in priceData)
+            {
+                if (data != null && !string.IsNullOrEmpty(data.StockCode))
+                _todayPriceDict[data.StockCode] = (data.CurrentPrice, data.ChangePercent);
+            }
+
+            // 更新DataGridView中今日涨幅列
+            foreach (DataGridViewRow row in _dataGridView.Rows)
+            {
+                var stockCode = row.Cells["StockCode"].Value?.ToString();
+                if (_todayPriceDict.TryGetValue(stockCode, out var priceInfo))
+                {
+                    row.Cells["TodayPrice"].Value = priceInfo.Price.ToString("F2");
+                    row.Cells["TodayChangePercent"].Value = priceInfo.ChangePercent.ToString("F2");
+                    
+                    // 根据涨跌幅设置颜色
+                    row.Cells["TodayChangePercent"].Style.ForeColor = 
+                        priceInfo.ChangePercent >= 0 ? System.Drawing.Color.FromArgb(220, 20, 60) : System.Drawing.Color.FromArgb(20, 160, 60);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorLogger.Log(ex, "DailyPickForm.LoadTodayRealtimeDataAsync", "获取今日行情失败");
         }
     }
 
@@ -193,7 +250,9 @@ public partial class DailyPickForm : Form
                 r.DeepSeekScore?.ToString("F1") ?? "-",
                 r.FinalScore.ToString("F1"),
                 limitUpInfo.Count > 0 ? limitUpInfo.Count.ToString() : "-",
-                !string.IsNullOrEmpty(limitUpInfo.Plates) ? limitUpInfo.Plates : "-"
+                !string.IsNullOrEmpty(limitUpInfo.Plates) ? limitUpInfo.Plates : "-",
+                "加载中...",  // 今日涨幅
+                "加载中..."   // 今日价格
             );
         }
 
