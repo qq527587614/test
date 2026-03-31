@@ -25,9 +25,27 @@ static class Program
         try
         {
             // 构建配置 - 使用更可靠的路径获取方式
-            var baseDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)
+            var exePath = Assembly.GetExecutingAssembly().Location;
+            var baseDirectory = Path.GetDirectoryName(exePath)
                 ?? AppContext.BaseDirectory
                 ?? Directory.GetCurrentDirectory();
+
+            // 诊断：显示实际使用的路径
+            var configPath = Path.Combine(baseDirectory, "appsettings.json");
+            var configExists = File.Exists(configPath);
+
+            // 如果配置文件不存在，尝试当前目录
+            if (!configExists)
+            {
+                baseDirectory = Directory.GetCurrentDirectory();
+                configPath = Path.Combine(baseDirectory, "appsettings.json");
+                configExists = File.Exists(configPath);
+            }
+
+            // 显示诊断信息（可选）
+            #if DEBUG
+            MessageBox.Show($"EXE路径: {exePath}\n基础目录: {baseDirectory}\n配置路径: {configPath}\n文件存在: {configExists}", "路径诊断", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            #endif
 
             var configuration = new ConfigurationBuilder()
                 .SetBasePath(baseDirectory)
