@@ -133,8 +133,13 @@ namespace StockAnalysisSystem.UI.Forms;
 
         try
         {
-            var stockCodes = results.Select(r => r.StockCode).Distinct().ToList();
-            var priceData = await _realtimeService.GetRealtimeDataAsync(stockCodes);
+            // 腾讯接口需要带前缀的股票代码（sz/sh）
+            var stockCodesWithPrefix = results.Select(r => r.StockCode)
+                .Distinct()
+                .Select(code => code.StartsWith("6") ? "sh" + code : "sz" + code)
+                .ToList();
+
+            var priceData = await _realtimeService.GetRealtimeDataAsync(stockCodesWithPrefix);
 
             _todayPriceDict.Clear();
             foreach (var data in priceData)
