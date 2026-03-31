@@ -42,10 +42,8 @@ static class Program
                 configExists = File.Exists(configPath);
             }
 
-            // 显示诊断信息（可选）
-            #if DEBUG
+            // 显示诊断信息
             MessageBox.Show($"EXE路径: {exePath}\n基础目录: {baseDirectory}\n配置路径: {configPath}\n文件存在: {configExists}", "路径诊断", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            #endif
 
             var configuration = new ConfigurationBuilder()
                 .SetBasePath(baseDirectory)
