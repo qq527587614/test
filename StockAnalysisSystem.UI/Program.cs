@@ -1,3 +1,6 @@
+using System;
+using System.IO;
+using System.Reflection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -21,9 +24,13 @@ static class Program
 
         try
         {
-            // 构建配置
+            // 构建配置 - 使用更可靠的路径获取方式
+            var baseDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)
+                ?? AppContext.BaseDirectory
+                ?? Directory.GetCurrentDirectory();
+
             var configuration = new ConfigurationBuilder()
-                .SetBasePath(Application.StartupPath)
+                .SetBasePath(baseDirectory)
                 .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
                 .Build();
 
