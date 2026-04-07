@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using StockAnalysisSystem.Core.DeepSeek;
 using StockAnalysisSystem.Core.Entities;
 using StockAnalysisSystem.Core.Repositories;
 using StockAnalysisSystem.Core.RealtimeData;
@@ -10,13 +11,17 @@ namespace StockAnalysisSystem.UI.Forms;
     {
         private readonly IServiceProvider _serviceProvider;
         private readonly IIndicatorRepository _indicatorRepository;
+        private readonly DeepSeekClient _deepSeekClient;
         private TencentRealtimeService? _realtimeService;
 
     private DataGridView _dgvPlates = null!;
     private DataGridView _dgvStocks = null!;
+    private TextBox _txtNewsInput = null!;
+    private DataGridView _dgvMarketAnalysis = null!;
     private DateTimePicker _dtpDate = null!;
     private ToolStripLabel _lblStatus = null!;
     private SplitContainer _splitContainer = null!;
+    private TabControl _tabControl = null!;
 
     // 板块统计数据模型
     private class PlateDataItem
@@ -42,10 +47,11 @@ namespace StockAnalysisSystem.UI.Forms;
         public bool IsLimitUp { get; set; }  // 是否涨停
     }
 
-    public PlateAnalysisForm(IServiceProvider serviceProvider, IIndicatorRepository indicatorRepository, TencentRealtimeService? realtimeService = null)
+    public PlateAnalysisForm(IServiceProvider serviceProvider, IIndicatorRepository indicatorRepository, DeepSeekClient deepSeekClient, TencentRealtimeService? realtimeService = null)
     {
         _serviceProvider = serviceProvider;
         _indicatorRepository = indicatorRepository;
+        _deepSeekClient = deepSeekClient;
         _realtimeService = realtimeService;
         InitializeComponent();
         InitializeControls();
@@ -55,7 +61,7 @@ namespace StockAnalysisSystem.UI.Forms;
     private void InitializeComponent()
     {
         Text = "板块分析";
-        Size = new Size(1200, 800);
+        Size = new Size(1400, 900);
         StartPosition = FormStartPosition.CenterParent;
     }
 
@@ -89,6 +95,15 @@ namespace StockAnalysisSystem.UI.Forms;
         toolStrip.Items.Add(_lblStatus);
 
         Controls.Add(toolStrip);
+
+        // TabControl
+        _tabControl = new TabControl
+        {
+            Dock = DockStyle.Fill
+        };
+
+        // Tab 1: 板块分析
+        var tabPage1 = new TabPage("板块分析");
 
         // 分割容器
         _splitContainer = new SplitContainer
@@ -148,8 +163,69 @@ namespace StockAnalysisSystem.UI.Forms;
         _dgvStocks.Columns.Add(new DataGridViewTextBoxColumn { Name = "Amount", HeaderText = "成交额(亿)", Width = 100 });
 
         _splitContainer.Panel2.Controls.Add(_dgvStocks);
+        tabPage1.Controls.Add(_splitContainer);
 
-        Controls.Add(_splitContainer);
+        // Tab 2: DeepSeek 市场分析
+        var tabPage2 = new TabPage("DeepSeek 市场分析");
+
+        var topPanel = new Panel
+        {
+            Dock = DockStyle.Top,
+            Height = 200,
+            Padding = new Padding(10)
+        };
+
+        var lblNews = new Label
+        {
+            Text = "市场消息:",
+            Location = new Point(10, 10),
+            AutoSize = true
+        };
+
+        _txtNewsInput = new TextBox
+        {
+            Location = new Point(10, 40),
+            Size = new Size(600, 120),
+            Multiline = true,
+            ScrollBars = ScrollBars.Vertical
+        };
+
+        var btnAnalyze = new Button
+        {
+            Text = "分析",
+            Location = new Point(630, 40),
+            Size = new Size(100, 120),
+            BackColor = Color.FromArgb(64, 169, 255),
+            ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat
+        };
+        btnAnalyze.Click += async (s, e) => await AnalyzeMarketAsync();
+
+        topPanel.Controls.AddRange(new Control[] { lblNews, _txtNewsInput, btnAnalyze });
+
+        _dgvMarketAnalysis = new DataGridView
+        {
+            Dock = DockStyle.Fill,
+            AllowUserToAddRows = false,
+            AllowUserToDeleteRows = false,
+            ReadOnly = true,
+            SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+            RowHeadersVisible = false,
+            ColumnHeadersVisible = true,
+            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill
+        };
+        _dgvMarketAnalysis.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
+
+        _dgvMarketAnalysis.Columns.Add(new DataGridViewTextBoxColumn { Name = "PlateName", HeaderText = "板块名称", Width = 150 });
+        _dgvMarketAnalysis.Columns.Add(new DataGridViewTextBoxColumn { Name = "Reason", HeaderText = "推荐理由", Width = 300 });
+        _dgvMarketAnalysis.Columns.Add(new DataGridViewTextBoxColumn { Name = "Confidence", HeaderText = "信心度", Width = 100 });
+
+        tabPage2.Controls.AddRange(new Control[] { topPanel, _dgvMarketAnalysis });
+
+        _tabControl.TabPages.Add(tabPage1);
+        _tabControl.TabPages.Add(tabPage2);
+
+        Controls.Add(_tabControl);
     }
 
     private async void LoadData()
@@ -527,5 +603,65 @@ namespace StockAnalysisSystem.UI.Forms;
         public string? time { get; set; }
         public decimal? cmc { get; set; }
         public decimal? last_px { get; set; }
+    }
+
+    /// <summary>
+    /// DeepSeek 市场分析
+    /// </summary>
+    private async Task AnalyzeMarketAsync()
+    {
+        try
+        {
+            var newsContent = _txtNewsInput.Text.Trim();
+            if (string.IsNullOrEmpty(newsContent))
+            {
+                MessageBox.Show("请输入市场消息", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            _lblStatus.Text = "分析中...";
+            _lblStatus.ForeColor = Color.Blue;
+
+            var result = await _deepSeekClient.AnalyzeMarketAsync(newsContent);
+
+            if (result == null)
+            {
+                MessageBox.Show("分析失败，请检查DeepSeek API配置", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                _lblStatus.Text = "分析失败";
+                _lblStatus.ForeColor = Color.Red;
+                return;
+            }
+
+            _dgvMarketAnalysis.Rows.Clear();
+
+            foreach (var plate in result.RecommendedPlates)
+            {
+                var rowIndex = _dgvMarketAnalysis.Rows.Add(
+                    plate.PlateName,
+                    plate.Reason,
+                    plate.Confidence.ToString("P2")
+                );
+
+                var cell = _dgvMarketAnalysis.Rows[rowIndex].Cells["Confidence"];
+                cell.Style.BackColor = plate.Confidence > 0.7m ? Color.LightGreen :
+                                        plate.Confidence > 0.4m ? Color.LightYellow : Color.LightPink;
+            }
+
+            _lblStatus.Text = $"分析完成: 推荐了 {result.RecommendedPlates.Count} 个板块";
+            _lblStatus.ForeColor = Color.Green;
+
+            if (!string.IsNullOrEmpty(result.MarketTrend))
+            {
+                MessageBox.Show($"市场趋势: {result.MarketTrend}\n\n风险提示:\n{string.Join("\n", result.Risks)}",
+                    "分析结果", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+        }
+        catch (Exception ex)
+        {
+            _lblStatus.Text = "分析失败";
+            _lblStatus.ForeColor = Color.Red;
+            ErrorLogger.Log(ex, "PlateAnalysisForm.AnalyzeMarket", "");
+            MessageBox.Show($"分析失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 }

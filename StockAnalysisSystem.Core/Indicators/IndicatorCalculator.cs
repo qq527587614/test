@@ -377,6 +377,7 @@ public class IndicatorCalculator
             var (bollUpper, bollMiddle, bollLower) = CalculateBOLL(prices);
             var volumeMa5 = CalculateMA(volumes, 5);
             var volumeMa10 = CalculateMA(volumes, 10);
+            var volumeMa120 = CalculateMA(volumes, 120);
 
             for (int i = 0; i < data.Count; i++)
             {
@@ -391,6 +392,7 @@ public class IndicatorCalculator
                     RSI12 = rsi12[i],
                     VolumeMA5 = volumeMa5[i],
                     VolumeMA10 = volumeMa10[i],
+                    VolumeMA120 = volumeMa120[i],
                     CreatedAt = DateTime.Now
                 };
 

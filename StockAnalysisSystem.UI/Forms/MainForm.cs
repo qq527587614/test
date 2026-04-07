@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using StockAnalysisSystem.Core.Utils;
 
 namespace StockAnalysisSystem.UI.Forms;
 
@@ -64,6 +65,7 @@ public partial class MainForm : Form
         pickMenu.DropDownItems.Add("每日选股(&D)", null, ShowDailyPickForm);
         pickMenu.DropDownItems.Add("选股历史(&H)", null, ShowPickHistoryForm);
         pickMenu.DropDownItems.Add(new ToolStripSeparator());
+        pickMenu.DropDownItems.Add("DeepSeek板块分析(&D)", null, ShowDeepSeekMarketAnalysisForm);
         pickMenu.DropDownItems.Add("板块分析(&B)", null, ShowPlateAnalysisForm);
         menuStrip.Items.Add(pickMenu);
 
@@ -108,12 +110,20 @@ public partial class MainForm : Form
 
     private void ShowInMainPanel(Form form)
     {
-        _mainPanel.Controls.Clear();
-        form.TopLevel = false;
-        form.FormBorderStyle = FormBorderStyle.None;
-        form.Dock = DockStyle.Fill;
-        _mainPanel.Controls.Add(form);
-        form.Show();
+        try
+        {
+            _mainPanel.Controls.Clear();
+            form.TopLevel = false;
+            form.FormBorderStyle = FormBorderStyle.None;
+            form.Dock = DockStyle.Fill;
+            _mainPanel.Controls.Add(form);
+            form.Show();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"打开窗体失败: {ex.Message}\n\n{ex.StackTrace}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            ErrorLogger.Log(ex, "MainForm.ShowInMainPanel", form.GetType().Name);
+        }
     }
 
     private void ShowStrategyManager(object? sender, EventArgs e)
@@ -165,6 +175,12 @@ public partial class MainForm : Form
     private void ShowPlateAnalysisForm(object? sender, EventArgs e)
     {
         var form = _serviceProvider.GetRequiredService<PlateAnalysisForm>();
+        ShowInMainPanel(form);
+    }
+
+    private void ShowDeepSeekMarketAnalysisForm(object? sender, EventArgs e)
+    {
+        var form = _serviceProvider.GetRequiredService<DeepSeekMarketAnalysisForm>();
         ShowInMainPanel(form);
     }
 

@@ -384,3 +384,176 @@ public class CombinedStrategy : IStrategy
         return result;
     }
 }
+
+/// <summary>
+/// 均线多头策略
+/// 1. 5日线大于10日线（均线多头）
+/// 2. 当天收盘价大于5日线
+/// 3. 当天收盘价大于开盘价（阳线）
+/// 4. 最近5天至少有两天量能大于120日量能均线3倍
+/// 5. 最近20天没有涨停
+/// 6. 当天收盘价不能是最近5日收盘价的最高价
+/// 7. 当日收盘价不能便宜5日线太远（价差不超过3%）
+/// 8. 当日的收盘价不能有长上影线（上影线长度不超过实体长度的30%）
+/// </summary>
+public class MultiMovingAverageStrategy : IStrategy
+{
+    public string Name => "均线多头策略";
+    public string StrategyType => "MultiMovingAverage";
+    public Dictionary<string, object> Parameters { get; set; } = new()
+    {
+        ["ShortPeriod"] = 5,
+        ["MediumPeriod"] = 10,
+        ["VolumeMaPeriod"] = 120,
+        ["VolumeMultiplier"] = 3.0,
+        ["CheckDays"] = 5,
+        ["RequiredExpansionDays"] = 2,
+        ["NoLimitUpDays"] = 20,
+        ["LimitUpPercent"] = 9.95m  // 涨停阈值（9.95%及以上视为涨停）
+    };
+
+    public List<Signal> GenerateSignals(string stockId, List<StockDailyData> dailyData, List<StockDailyIndicator> indicators)
+    {
+        var result = new List<Signal>();
+
+        if (dailyData.Count < Math.Max(
+            StrategyParameterHelper.GetIntValue(Parameters["MediumPeriod"]),
+            StrategyParameterHelper.GetIntValue(Parameters["VolumeMaPeriod"])))
+        {
+            return result;
+        }
+
+        var shortPeriod = StrategyParameterHelper.GetIntValue(Parameters["ShortPeriod"]);
+        var mediumPeriod = StrategyParameterHelper.GetIntValue(Parameters["MediumPeriod"]);
+        var volumeMaPeriod = StrategyParameterHelper.GetIntValue(Parameters["VolumeMaPeriod"]);
+        var volumeMultiplier = StrategyParameterHelper.GetDecimalValue(Parameters["VolumeMultiplier"]);
+        var checkDays = StrategyParameterHelper.GetIntValue(Parameters["CheckDays"]);
+        var requiredExpansionDays = StrategyParameterHelper.GetIntValue(Parameters["RequiredExpansionDays"]);
+        var noLimitUpDays = StrategyParameterHelper.GetIntValue(Parameters["NoLimitUpDays"], 20);  // 默认20天
+        var limitUpPercent = StrategyParameterHelper.GetDecimalValue(Parameters["LimitUpPercent"], 9.95m);  // 默认9.95%
+
+        for (int i = Math.Max(volumeMaPeriod, mediumPeriod); i < dailyData.Count; i++)
+        {
+            var currentIndicator = indicators[i];
+            var currentData = dailyData[i];
+
+            // 检查均线多头：5日线大于10日线
+            if (!currentIndicator.MA5.HasValue || !currentIndicator.MA10.HasValue)
+                continue;
+
+            if (currentIndicator.MA5.Value <= currentIndicator.MA10.Value)
+                continue;
+
+            // 检查收盘价大于5日线
+            if (currentData.ClosePrice <= currentIndicator.MA5.Value)
+                continue;
+
+            // 检查当天收盘价大于开盘价（阳线）
+            if (currentData.ClosePrice <= currentData.OpenPrice)
+                continue;
+
+            // 检查最近N天的量能放大情况
+            int expansionDays = 0;
+            int startCheckIndex = Math.Max(0, i - checkDays + 1);
+
+            for (int j = startCheckIndex; j <= i; j++)
+            {
+                if (indicators[j].VolumeMA120.HasValue &&
+                    dailyData[j].Volume > indicators[j].VolumeMA120.Value * volumeMultiplier)
+                {
+                    expansionDays++;
+                }
+            }
+
+            // 至少有N天量能放大
+            if (expansionDays < requiredExpansionDays)
+                continue;
+
+            // 检查最近20天没有涨停
+            if (i >= noLimitUpDays)
+            {
+                bool hasLimitUp = false;
+                int startLimitUpIndex = Math.Max(0, i - noLimitUpDays);
+
+                for (int j = startLimitUpIndex; j < i; j++)
+                {
+                    if (dailyData[j].ChangePercent.HasValue && dailyData[j].ChangePercent.Value >= limitUpPercent)
+                    {
+                        hasLimitUp = true;
+                        break;
+                    }
+                }
+
+                if (hasLimitUp)
+                {
+                    continue;
+                }
+            }
+            else if (i < noLimitUpDays)
+            {
+                // 数据不足，无法比较
+                continue;
+            }
+
+            //// 检查当天收盘价不能是最近5日收盘价的最高价
+            //if (i >= checkDays)
+            //{
+            //    decimal? maxCloseInLast5Days = null;
+            //    int closeCheckStartIndex = i - checkDays + 1;
+
+            //    for (int j = closeCheckStartIndex; j <= i; j++)
+            //    {
+            //        if (!maxCloseInLast5Days.HasValue || dailyData[j].ClosePrice > maxCloseInLast5Days.Value)
+            //        {
+            //            maxCloseInLast5Days = dailyData[j].ClosePrice;
+            //        }
+            //    }
+
+            //    if (maxCloseInLast5Days.HasValue && currentData.ClosePrice >= maxCloseInLast5Days.Value)
+            //    {
+            //        continue;
+            //    }
+            //}
+            //else
+            //{
+            //    // 数据不足
+            //    continue;
+            //}
+
+            // 检查当日收盘价不能便宜5日线太远（价差不超过3%）
+            if (currentIndicator.MA5.HasValue)
+            {
+                decimal priceDiffPercent = (currentData.ClosePrice - currentIndicator.MA5.Value) / currentIndicator.MA5.Value * 100;
+                if (priceDiffPercent < -3m)
+                {
+                    continue;
+                }
+            }
+
+            // 检查当日收盘价不能有长上影线（上影线长度不超过实体长度的30%）
+            if (currentData.HighPrice > 0 && currentData.LowPrice > 0 && currentData.ClosePrice > 0)
+            {
+                decimal bodyLength = Math.Abs(currentData.ClosePrice - currentData.LowPrice);
+                decimal upperShadowLength = currentData.HighPrice - currentData.ClosePrice;
+
+                // 如果上影线长度超过实体的30%，则跳过
+                if (upperShadowLength > bodyLength * 0.3m)
+                {
+                    continue;
+                }
+            }
+
+            // 所有条件满足，生成买入信号
+            result.Add(new Signal
+            {
+                Date = currentData.TradeDate,
+                StockId = stockId,
+                Type = SignalType.Buy,
+                Reason = $"均线多头(MA{shortPeriod}>{mediumPeriod}), 收盘价>{currentIndicator.MA5.Value:F2}, 收盘价>开盘价(阳线), 最近{checkDays}天有{expansionDays}天量能>{volumeMultiplier}倍120日均量, 最近{noLimitUpDays}天无涨停, 非近期新高, 价差合理, 无长上影",
+                Strength = 0.8m
+            });
+        }
+
+        return result;
+    }
+}

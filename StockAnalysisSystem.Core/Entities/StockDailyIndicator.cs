@@ -50,6 +50,12 @@ public class StockDailyIndicator
     [Column("VolumeMA10", TypeName = "decimal(15,2)")]
     public decimal? VolumeMA10 { get; set; }
 
+    /// <summary>
+    /// 120日量能均线
+    /// </summary>
+    [Column("VolumeMA120", TypeName = "decimal(15,2)")]
+    public decimal? VolumeMA120 { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.Now;
 
     // 映射到实际数据库字段

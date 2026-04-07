@@ -12,7 +12,8 @@ public class StrategyFactory
         ["MovingAverageCross"] = typeof(MovingAverageCrossStrategy),
         ["MACDCross"] = typeof(MACDCrossStrategy),
         ["RSIOverSold"] = typeof(RSIOverSoldStrategy),
-        ["Combined"] = typeof(CombinedStrategy)
+        ["Combined"] = typeof(CombinedStrategy),
+        ["MultiMovingAverage"] = typeof(MultiMovingAverageStrategy)
     };
 
     /// <summary>
@@ -43,11 +44,23 @@ public class StrategyFactory
             if (jsonElements == null)
                 return Create(strategyType, new Dictionary<string, object>());
 
-            // 将 JsonElement 转换为相应的 CLR 类型
+            // 获取默认参数
+            var defaultParams = GetDefaultParameters(strategyType);
+
+            // 将 JsonElement 转换为相应的 CLR 类型，并合并默认参数
             var parameters = new Dictionary<string, object>();
             foreach (var kvp in jsonElements)
             {
                 parameters[kvp.Key] = ConvertJsonElement(kvp.Value);
+            }
+
+            // 合并默认参数和数据库参数（数据库参数覆盖默认参数）
+            foreach (var defaultKvp in defaultParams)
+            {
+                if (!parameters.ContainsKey(defaultKvp.Key))
+                {
+                    parameters[defaultKvp.Key] = defaultKvp.Value;
+                }
             }
 
             return Create(strategyType, parameters);

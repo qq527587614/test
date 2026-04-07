@@ -93,31 +93,24 @@ public class DeepSeekClient
 
             var json = JsonSerializer.Serialize(requestBody);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
-
             var response = await _httpClient.PostAsync(_settings.Endpoint, content);
             var responseString = await response.Content.ReadAsStringAsync();
 
             if (response.IsSuccessStatusCode)
             {
-                var responseJson = JsonDocument.Parse(responseString);
-                if (responseJson.RootElement.TryGetProperty("choices", out var choices) &&
-                    choices.GetArrayLength() > 0)
-                {
-                    return choices[0].GetProperty("message").GetProperty("content").GetString();
-                }
+                return responseString;
             }
             else
             {
-                _logger?.LogError("DeepSeek API错误: {StatusCode} - {Response}", 
-                    response.StatusCode, responseString);
+                _logger?.LogError($"DeepSeek API 请求失败: {response.StatusCode}");
+                return null;
             }
         }
         catch (Exception ex)
         {
-            _logger?.LogError(ex, "DeepSeek API请求失败");
+            _logger?.LogError(ex, "DeepSeek API 请求异常");
+            return null;
         }
-
-        return null;
     }
 
     /// <summary>
@@ -126,17 +119,26 @@ public class DeepSeekClient
     private string BuildPrompt(List<DailyPick.StockPickInfo> stocks, string? customPrompt)
     {
         var sb = new StringBuilder();
-        sb.AppendLine(customPrompt ?? @"你是一位专业的股票分析师。请根据以下股票信息，对每只股票给出买入评分（0-100分）。
-评分标准：
-1. 技术面：价格走势、成交量变化（30%）
-2. 基本面：市值规模、行业前景（30%）
-3. 市场情绪：换手率、板块热度（20%）
-4. 风险评估：流动性、波动性（20%）
 
-请以JSON格式返回评分结果，格式如下：
-{""scores"":[{""code"":""股票代码"",""score"":85,""reason"":""简要理由""}]}
+        if (!string.IsNullOrEmpty(customPrompt))
+        {
+            sb.AppendLine(customPrompt);
+            return sb.ToString();
+        }
 
-股票列表：");
+        sb.AppendLine("请对以下股票进行评分，标准如下：");
+        sb.AppendLine();
+        sb.AppendLine("评分标准：");
+        sb.AppendLine("1. 技术面：价格走势、成交量变化（30%）");
+        sb.AppendLine("2. 基本面：市值规模、行业前景（30%）");
+        sb.AppendLine("3. 市场情绪：换手率、板块热度（20%）");
+        sb.AppendLine("4. 风险评估：流动性、波动性（20%）");
+        sb.AppendLine();
+
+        sb.AppendLine("请以JSON格式返回评分结果，格式如下：");
+        sb.AppendLine("{\"scores\":[{\"code\":\"股票代码\",\"score\":85,\"reason\":\"简要理由\"}]}");
+        sb.AppendLine();
+        sb.AppendLine("股票列表：");
 
         foreach (var stock in stocks)
         {
@@ -203,4 +205,256 @@ public class DeepSeekClient
 
         return await SendRequestAsync(prompt);
     }
+
+    /// <summary>
+    /// 分析市场消息并推荐板块
+    /// </summary>
+    public async Task<MarketAnalysisResult?> AnalyzeMarketAsync(string newsContent)
+    {
+        if (string.IsNullOrEmpty(_settings.ApiKey))
+        {
+            _logger?.LogWarning("DeepSeek API密钥未配置");
+            return null;
+        }
+
+        try
+        {
+            var prompt = $@"你是一位股票分析师。请分析当前A股市场并推荐板块。
+
+任务：
+1. 判断市场趋势（bullish/bearish/neutral）
+2. 推荐适合短线操作的，短线最强的3个板块，还有就是最近1-2天有利好的板块
+3. 给出每个板块的推荐理由和信心度（0.6-1.0之间）
+
+返回JSON格式（只能返回JSON代码块，不要其他说明）：
+
+```json
+{{
+    ""marketTrend"": ""市场趋势描述，20字以内"",
+    ""trend"": ""bullish"",
+    ""recommendedPlates"": [
+        {{
+            ""plateName"": ""板块名称"",
+            ""reason"": ""推荐理由，15字以内"",
+            ""confidence"": 0.75,
+            ""stocks"": [""000001"", ""600519""]
+        }}
+    ],
+    ""risks"": [""风险1"", ""风险2""]
+}}
+```
+
+要求：
+- 必须返回2-4个板块
+- confidence是0.6到1.0之间的数字
+- 板块名称：人工智能、新能源车、半导体、消费电子、医药生物、券商等
+- stocks: 1-2只代表性股票代码（6位数字）
+- 只返回```json代码块```
+- 不要其他文字说明";
+
+            var response = await SendRequestAsync(prompt);
+
+            // 记录日志
+            await _logRepo.AddAsync(new Entities.DeepSeekLog
+            {
+                RequestData = JsonSerializer.Serialize(new { promptLength = prompt.Length, promptPreview = prompt.Substring(0, Math.Min(200, prompt.Length)) + "..." }),
+                ResponseData = string.IsNullOrEmpty(response) ? "null" : response,
+                UsedFor = "MarketAnalysis"
+            });
+
+            _logger?.LogInformation($"DeepSeek API 响应长度: {response?.Length ?? 0}");
+
+            if (string.IsNullOrEmpty(response))
+            {
+                _logger?.LogWarning("DeepSeek API 返回空响应");
+                return null;
+            }
+
+            _logger?.LogInformation($"DeepSeek 响应前200字符: {response.Substring(0, Math.Min(200, response.Length))}");
+
+            return ParseMarketAnalysis(response);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "DeepSeek市场分析失败");
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// 解析市场分析结果
+    /// </summary>
+    private MarketAnalysisResult? ParseMarketAnalysis(string response)
+    {
+        try
+        {
+            _logger?.LogInformation($"开始解析DeepSeek响应，总长度: {response.Length}");
+
+            // 先解析外层 OpenAI 格式的响应
+            var outerJson = JsonDocument.Parse(response);
+
+            // 提取 content 字段
+            if (!outerJson.RootElement.TryGetProperty("choices", out var choices) ||
+                choices.GetArrayLength() == 0)
+            {
+                _logger?.LogWarning("响应中未找到 choices 数组");
+                return null;
+            }
+
+            var firstChoice = choices[0];
+            if (!firstChoice.TryGetProperty("message", out var message) ||
+                !message.TryGetProperty("content", out var contentElement))
+            {
+                _logger?.LogWarning("响应中未找到 message.content 字段");
+                return null;
+            }
+
+            var content = contentElement.GetString() ?? "";
+            _logger?.LogInformation($"提取到的 content 长度: {content.Length}");
+
+            // 移除 markdown 代码块标记（如果有）
+            var jsonStr = content.Trim();
+            if (jsonStr.StartsWith("```json"))
+            {
+                jsonStr = jsonStr.Substring(7);
+            }
+            else if (jsonStr.StartsWith("```"))
+            {
+                jsonStr = jsonStr.Substring(3);
+            }
+
+            if (jsonStr.EndsWith("```"))
+            {
+                jsonStr = jsonStr.Substring(0, jsonStr.Length - 3);
+            }
+
+            jsonStr = jsonStr.Trim();
+
+            _logger?.LogInformation($"清理后的JSON字符串: {jsonStr}");
+
+            // 解析内层 JSON
+            var json = JsonDocument.Parse(jsonStr);
+
+            var result = new MarketAnalysisResult
+            {
+                MarketTrend = json.RootElement.TryGetProperty("marketTrend", out var mt)
+                    ? mt.GetString() ?? ""
+                    : "",
+                Trend = json.RootElement.TryGetProperty("trend", out var tr)
+                    ? tr.GetString() ?? "neutral"
+                    : "neutral"
+            };
+
+            _logger?.LogInformation($"市场趋势: {result.MarketTrend}, 类型: {result.Trend}");
+
+            if (json.RootElement.TryGetProperty("recommendedPlates", out var plates))
+            {
+                var plateCount = 0;
+                foreach (var plate in plates.EnumerateArray())
+                {
+                    var plateRec = new PlateRecommendation
+                    {
+                        PlateName = plate.TryGetProperty("plateName", out var pn)
+                            ? pn.GetString() ?? ""
+                            : "",
+                        Reason = plate.TryGetProperty("reason", out var re)
+                            ? re.GetString() ?? ""
+                            : "",
+                        Confidence = plate.TryGetProperty("confidence", out var cf)
+                            ? cf.GetDecimal()
+                            : 0m
+                    };
+
+                    _logger?.LogInformation($"解析到板块: {plateRec.PlateName}, 理由: {plateRec.Reason}, 信心度: {plateRec.Confidence}");
+
+                    if (plate.TryGetProperty("stocks", out var stocks))
+                    {
+                        foreach (var stock in stocks.EnumerateArray())
+                        {
+                            plateRec.Stocks.Add(stock.GetString() ?? "");
+                        }
+                    }
+
+                    result.RecommendedPlates.Add(plateRec);
+                    plateCount++;
+                }
+                _logger?.LogInformation($"共解析到 {plateCount} 个推荐板块");
+            }
+            else
+            {
+                _logger?.LogWarning("JSON中未找到 recommendedPlates 字段");
+            }
+
+            if (json.RootElement.TryGetProperty("risks", out var risks))
+            {
+                foreach (var risk in risks.EnumerateArray())
+                {
+                    result.Risks.Add(risk.GetString() ?? "");
+                }
+            }
+
+            _logger?.LogInformation($"解析完成，最终推荐板块数: {result.RecommendedPlates.Count}");
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "解析市场分析响应失败: {Response}", response);
+        }
+
+        return null;
+    }
+}
+
+/// <summary>
+/// 市场分析结果
+/// </summary>
+public class MarketAnalysisResult
+{
+    /// <summary>
+    /// 市场趋势描述
+    /// </summary>
+    public string MarketTrend { get; set; } = "";
+
+    /// <summary>
+    /// 市场趋势类型
+    /// </summary>
+    public string Trend { get; set; } = "neutral";
+
+    /// <summary>
+    /// 推荐的板块
+    /// </summary>
+    public List<PlateRecommendation> RecommendedPlates { get; set; } = new();
+
+    /// <summary>
+    /// 风险提示
+    /// </summary>
+    public List<string> Risks { get; set; } = new();
+}
+
+/// <summary>
+/// 板块推荐
+/// </summary>
+public class PlateRecommendation
+{
+    /// <summary>
+    /// 板块名称
+    /// </summary>
+    public string PlateName { get; set; } = "";
+
+    /// <summary>
+    /// 推荐理由
+    /// </summary>
+    public string Reason { get; set; } = "";
+
+    /// <summary>
+    /// 信心度（0-1）
+    /// </summary>
+    public decimal Confidence { get; set; }
+
+    /// <summary>
+    /// 代表性股票代码
+    /// </summary>
+    public List<string> Stocks { get; set; } = new();
 }

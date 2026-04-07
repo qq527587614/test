@@ -156,7 +156,8 @@ public class DailyPicker
             progress?.Report($"加载 {stocks.Count} 只股票的数据...");
 
             // 优化：批量查询日线数据（2次查询替代2N次查询）
-            var startDate = actualTradeDate.AddDays(-100);
+            // 注意：计算120日均线需要至少120天数据，为了安全起见，获取150天数据
+            var startDate = actualTradeDate.AddDays(-200);
 
             // 批量获取所有股票的日线数据
             var allDailyData = await _dailyDataRepo.GetByDateRangeAsync(startDate, actualTradeDate);
@@ -415,9 +416,9 @@ public class DailyPicker
 
             // 6. 按策略筛选，只保留每种策略评分前5的股票
             topResults = results
-                .GroupBy(r => r.StrategyId)
-                .SelectMany(g => g.Take(5))
-                .OrderByDescending(r => r.FinalScore)
+                //.GroupBy(r => r.StrategyId)
+                //.SelectMany(g => g.Take(5))
+                //.OrderByDescending(r => r.FinalScore)
                 .ToList();
 
             progress?.Report($"筛选后保留 {topResults.Count} 只股票（每种策略前5）");
