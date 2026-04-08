@@ -169,7 +169,17 @@ public class DailyPicker
 
             // 批量获取所有股票的日线数据
             var allDailyData = await _dailyDataRepo.GetByDateRangeAsync(startDate, actualTradeDate);
-
+            
+            // 优化：如果是首板回落策略，先过滤掉不以60和00开头的股票
+            List<string> filteredStockIds = stocks.Select(s => s.Id).ToList();
+            if (isOnlyFirstBoardPullback)
+            {
+                filteredStockIds = filteredStockIds.Where(id => id.Length >= 2 && (id.StartsWith("00") || id.StartsWith("60"))).ToList();
+                progress?.Report($"首板回落策略：过滤后保留 {filteredStockIds.Count}/{stocks.Count} 只股票");
+            }
+            
+            var stockIdSet = new HashSet<string>(filteredStockIds);
+            
             // 批量获取所有股票的技术指标
             var allIndicators = await _indicatorRepo.GetByDateRangeAsync(startDate, actualTradeDate);
             
@@ -180,6 +190,15 @@ public class DailyPicker
             // 构建结果字典
             foreach (var stock in stocks)
             {
+                // 如果是首板回落策略且股票代码不符合条件，跳过
+                if (isOnlyFirstBoardPullback)
+                {
+                    if (stock.Id.Length < 2 || (stock.Id.Substring(0, 2) != "00" && stock.Id.Substring(0, 2) != "60"))
+                    {
+                        continue;
+                    }
+                }
+
                 try
                 {
                     // 从内存中获取该股票的数据
