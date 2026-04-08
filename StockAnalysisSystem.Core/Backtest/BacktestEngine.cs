@@ -963,8 +963,17 @@ public class BacktestEngine
             var buyPrice = trade.BuyPrice;
             var currentPrice = stockDailyData.ClosePrice;
             var profitLossPercent = (currentPrice - buyPrice) / buyPrice * 100;
+            var holdingDays = (tradeDate - trade.BuyDate.Date).Days;
 
-            // 检查止损
+            // 获取涨停板限制
+            decimal limitUpPercent = GetLimitUpPercent(trade.StockCode);
+
+            // 新的卖出逻辑
+            // 1. 持仓第1天（买入当天）：不做任何卖出判断（除非止损）
+            // 2. 持仓第2天：如果上涨且未涨停，卖出
+            // 3. 持仓第3天：如果没有涨停，卖出
+
+            // 先检查止损（所有交易日都检查）
             if (profitLossPercent <= stopLossPercent)
             {
                 trade.SellDate = tradeDate;
@@ -980,43 +989,41 @@ public class BacktestEngine
                 continue;
             }
 
-            // 检查策略卖出信号
-            var stockIndicators = indicatorsByStock[trade.StockId]
-                .Where(i => i.TradeDate.Date == tradeDate.Date)
-                .ToList();
-
-            var todayIndicators = stockIndicators;
-
-            if (todayIndicators.Count > 0)
+            // 持仓第2天：如果上涨但未涨停，卖出
+            if (holdingDays == 1)
             {
-                var allDailyData = dailyDataByStock[trade.StockId]
-                    .Where(d => d.TradeDate <= tradeDate)
-                    .OrderBy(d => d.TradeDate)
-                    .ToList();
-
-                // 检查所有策略的卖出信号
-                foreach (var strategy in strategyInstances)
+                if (profitLossPercent > 0 && profitLossPercent < limitUpPercent)
                 {
-                    var signals = strategy.GenerateSignals(trade.StockId, allDailyData, todayIndicators);
+                    trade.SellDate = tradeDate;
+                    trade.SellPrice = currentPrice * (1 - settings.Slippage);
+                    trade.SellReason = $"第2天上涨未涨停(涨幅:{profitLossPercent:F2}%)";
 
-                    var sellSignal = signals.FirstOrDefault(s =>
-                        s.Type == Strategies.SignalType.Sell &&
-                        s.Date.Date == tradeDate.Date);
+                    var buyAmount = buyPrice * trade.Shares;
+                    var sellAmount = trade.SellPrice.Value * trade.Shares;
+                    trade.Commission = (buyAmount + sellAmount) * settings.Commission;
+                    trade.ProfitLoss = sellAmount - buyAmount - trade.Commission;
+                    trade.ProfitLossPercent = trade.ProfitLoss / buyAmount * 100;
+                    trade.HoldingDays = (trade.SellDate.Value - trade.BuyDate).Days;
+                    continue;
+                }
+            }
 
-                    if (sellSignal != null)
-                    {
-                        trade.SellDate = tradeDate;
-                        trade.SellPrice = stockDailyData.OpenPrice * (1 - settings.Slippage);
-                        trade.SellReason = $"策略卖出({strategy.Name})";
+            // 持仓第3天：如果没有涨停，卖出
+            if (holdingDays == 2)
+            {
+                if (profitLossPercent < limitUpPercent)
+                {
+                    trade.SellDate = tradeDate;
+                    trade.SellPrice = currentPrice * (1 - settings.Slippage);
+                    trade.SellReason = $"第3天未涨停(涨幅:{profitLossPercent:F2}%)";
 
-                        var buyAmount = buyPrice * trade.Shares;
-                        var sellAmount = trade.SellPrice.Value * trade.Shares;
-                        trade.Commission = (buyAmount + sellAmount) * settings.Commission;
-                        trade.ProfitLoss = sellAmount - buyAmount - trade.Commission;
-                        trade.ProfitLossPercent = trade.ProfitLoss / buyAmount * 100;
-                        trade.HoldingDays = (trade.SellDate.Value - trade.BuyDate).Days;
-                        break;
-                    }
+                    var buyAmount = buyPrice * trade.Shares;
+                    var sellAmount = trade.SellPrice.Value * trade.Shares;
+                    trade.Commission = (buyAmount + sellAmount) * settings.Commission;
+                    trade.ProfitLoss = sellAmount - buyAmount - trade.Commission;
+                    trade.ProfitLossPercent = trade.ProfitLoss / buyAmount * 100;
+                    trade.HoldingDays = (trade.SellDate.Value - trade.BuyDate).Days;
+                    continue;
                 }
             }
         }
@@ -1046,4 +1053,34 @@ public class BacktestEngine
             }
         }
     }
+
+    /// <summary>
+    /// 根据股票代码获取涨停板限制
+    /// </summary>
+    /// <param name="stockCode">股票代码</param>
+    /// <returns>涨停板涨幅限制（百分数）</returns>
+    private decimal GetLimitUpPercent(string stockCode)
+    {
+        // 主板（60开头、00开头）：10%
+        if (stockCode.StartsWith("60") || stockCode.StartsWith("00"))
+        {
+            return 10m;
+        }
+        // 创业板（30开头）：20%
+        else if (stockCode.StartsWith("30"))
+        {
+            return 20m;
+        }
+        // 科创板（688开头）：20%
+        else if (stockCode.StartsWith("688"))
+        {
+            return 20m;
+        }
+        // 默认按主板处理
+        else
+        {
+            return 10m;
+        }
+    }
 }
+
