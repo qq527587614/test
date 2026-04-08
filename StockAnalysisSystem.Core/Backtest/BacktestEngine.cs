@@ -622,33 +622,90 @@ public class BacktestEngine
                 // 7. 执行买入（每天只买入评分最高的1只股票）
                 if (buySignals.Count > 0)
                 {
-                    // 计算每只股票的评分（基于涨跌幅）
-                    var scoredSignals = buySignals.Select(signal =>
+                    // 计算每只股票的综合评分（与每日选股保持一致）
+                    var scoredSignals = new List<(Strategies.Signal Signal, decimal Score)>();
+                    
+                    foreach (var signal in buySignals)
                     {
-                        var stockData = dailyDataByStock[signal.StockId]
+                        var tradeStockData = dailyDataByStock[signal.StockId]
                             .FirstOrDefault(d => d.TradeDate == tradeDate);
 
-                        var score = stockData?.ChangePercent ?? 0m; // 使用涨跌幅作为评分
-                        return new { Signal = signal, Score = score };
-                    })
-                    .OrderByDescending(x => x.Score) // 按涨跌幅降序排列
-                    .ToList();
+                        var tradeStock = stocksDict.GetValueOrDefault(signal.StockId);
+                        if (tradeStockData == null || tradeStock == null)
+                            continue;
+
+                        // DeepSeek评分（如果没有则70分）- 权重40%
+                        var deepSeekScore = tradeStock.CirculationValue.HasValue ? 70m : 70m;
+                        
+                        // 技术指标评分（权重30%）
+                        var technicalScore = 0m;
+                        
+                        // 涨跌幅评分（权重20%）
+                        var marketScore = 0m;
+                        var changePercent = tradeStockData.ChangePercent ?? 0m;
+                        
+                        if (changePercent >= 1m && changePercent <= 5m)
+                        {
+                            marketScore += 0.8m * 20m; // 适中涨幅
+                        }
+                        else if (changePercent >= 0m && changePercent < 1m)
+                        {
+                            marketScore += 0.6m * 20m; // 小幅上涨
+                        }
+                        else if (changePercent > 5m && changePercent <= 8m)
+                        {
+                            marketScore += 0.5m * 20m; // 涨幅较大
+                        }
+                        else if (changePercent < 0m && changePercent >= -3m)
+                        {
+                            marketScore += 0.4m * 20m; // 小幅下跌可能是洗盘
+                        }
+                        else if (changePercent < -3m)
+                        {
+                            marketScore += 0.3m * 20m; // 大幅下跌
+                        }
+                        
+                        // 换手率评分（权重20%的一部分）
+                        if (tradeStockData.TurnoverRate.HasValue)
+                        {
+                            var turnover = tradeStockData.TurnoverRate.Value;
+                            if (turnover >= 2m && turnover <= 10m)
+                            {
+                                marketScore += 0.2m * 20m; // 换手率适中
+                            }
+                            else if (turnover > 10m)
+                            {
+                                marketScore += 0.1m * 20m; // 换手率过高可能是炒作
+                            }
+                        }
+                        
+                        // 策略信号数量评分（权重10%）
+                        // 由于我们每天只买一次，所以这个评分都是一样的，可以忽略或给固定分
+                        
+                        // 最终得分
+                        var finalScore = deepSeekScore + technicalScore + marketScore;
+                        
+                        scoredSignals.Add((signal, finalScore));
+                    }
+                    
+                    // 按综合评分降序排列
+                    scoredSignals = scoredSignals.OrderByDescending(x => x.Score).ToList();
 
                     // 只买入排名第一的股票
-                    var topSignal = scoredSignals.First();
+                    var topSignal = scoredSignals.First().Signal;
 
-                    var stockData = dailyDataByStock[topSignal.Signal.StockId]
+                    var stockData = dailyDataByStock[topSignal.StockId]
                         .FirstOrDefault(d => d.TradeDate == tradeDate);
 
                     if (stockData == null) continue;
 
-                    var stock = stocksDict.GetValueOrDefault(topSignal.Signal.StockId);
+                    var stock = stocksDict.GetValueOrDefault(topSignal.StockId);
                     if (stock == null) continue;
 
                     var buyPrice = stockData.ClosePrice * (1 + settings.Slippage);
                     var trade = new TradeRecord
                     {
-                        StockId = topSignal.Signal.StockId,
+                        StockId = topSignal.StockId,
                         StockCode = stock.StockCode,
                         StockName = stock.StockName,
                         StrategyName = string.Join(" + ", strategyInstances.Select(s => s.Name)),
