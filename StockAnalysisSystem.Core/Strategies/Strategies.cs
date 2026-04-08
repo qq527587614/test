@@ -560,7 +560,7 @@ public class MultiMovingAverageStrategy : IStrategy
 
 /// <summary>
 /// 首板后回落策略
-/// 1. 识别首板（第一次涨停）并记录最低价
+/// 1. 从行情表（stockdailydata）中识别首板（第一次涨停）并记录最低价
 /// 2. 在首板后，股价回落到首板最低价附近时发出买入信号
 /// 3. 根据距离首板的天数评分，天数越少评分越高
 /// </summary>
