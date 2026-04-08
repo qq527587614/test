@@ -630,6 +630,14 @@ public class FirstBoardPullbackStrategy : IStrategy
             if (daysAfterLimitUp < minDaysAfterLimitUp)
                 continue;
 
+            // 新增条件1：当天股价必须是跌的
+            if (!data.ChangePercent.HasValue || data.ChangePercent.Value >= 0)
+                continue;
+
+            // 新增条件2：当天股价不能跌破首板当日的最低价格
+            if (data.LowPrice < firstLimitUpLowPrice.Value)
+                continue;
+
             // 计算当前价格与首板最低价的偏差
             decimal deviation = (data.ClosePrice - firstLimitUpLowPrice.Value) / firstLimitUpLowPrice.Value;
 
@@ -649,7 +657,7 @@ public class FirstBoardPullbackStrategy : IStrategy
                     Date = data.TradeDate,
                     StockId = stockId,
                     Type = SignalType.Buy,
-                    Reason = $"首板后回落, 首板日期:{firstLimitUpDate.Value:yyyy-MM-dd}, 首板最低价:{firstLimitUpLowPrice.Value:F2}, 距首板{daysAfterLimitUp}天, 当前价:{data.ClosePrice:F2}, 偏差:{deviation*100:F2}%",
+                    Reason = $"首板后回落, 首板日期:{firstLimitUpDate.Value:yyyy-MM-dd}, 首板最低价:{firstLimitUpLowPrice.Value:F2}, 距首板{daysAfterLimitUp}天, 当日涨幅:{data.ChangePercent.Value:F2}%, 当前价:{data.ClosePrice:F2}, 偏差:{deviation*100:F2}%, 当日最低价:{data.LowPrice:F2}≥首板最低价",
                     Strength = strength
                 });
 
