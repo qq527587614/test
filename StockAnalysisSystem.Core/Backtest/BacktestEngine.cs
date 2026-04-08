@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using StockAnalysisSystem.Core.DailyPick;
 using StockAnalysisSystem.Core.Entities;
 using StockAnalysisSystem.Core.Indicators;
 using StockAnalysisSystem.Core.Repositories;
@@ -21,6 +22,7 @@ public class BacktestEngine
     private readonly IDailyPickRepository _dailyPickRepo;
     private readonly IStrategyRepository _strategyRepo;
     private readonly ILogger<BacktestEngine>? _logger;
+    private readonly DailyPicker _dailyPicker;
 
     public BacktestEngine(
         IStockRepository stockRepo,
@@ -29,6 +31,7 @@ public class BacktestEngine
         IBacktestTaskRepository backtestTaskRepo,
         IDailyPickRepository dailyPickRepo,
         IStrategyRepository strategyRepo,
+        DailyPicker dailyPicker,
         ILogger<BacktestEngine>? logger = null)
     {
         _stockRepo = stockRepo;
@@ -37,6 +40,7 @@ public class BacktestEngine
         _backtestTaskRepo = backtestTaskRepo;
         _dailyPickRepo = dailyPickRepo;
         _strategyRepo = strategyRepo;
+        _dailyPicker = dailyPicker;
         _logger = logger;
     }
 
@@ -493,27 +497,7 @@ public class BacktestEngine
 
         try
         {
-            // 1. 加载选中的策略
-            progress?.Report($"加载 {settings.StrategyIds!.Count} 个策略...");
-            var strategies = await _strategyRepo.GetByIdsAsync(settings.StrategyIds);
-
-            // 2. 加载所有股票信息
-            progress?.Report("加载股票信息...");
-            var stocks = await _stockRepo.GetAllAsync();
-
-            // 检查是否所有策略都是首板回落策略
-            var isOnlyFirstBoardPullback = strategies.Count > 0 &&
-                strategies.All(s => s.StrategyType == "FirstBoardPullback");
-
-            // 如果都是首板回落策略，过滤股票（只保留60和00开头的）
-            if (isOnlyFirstBoardPullback)
-            {
-                var originalCount = stocks.Count;
-                stocks = stocks.Where(s => s.StockCode.StartsWith("00") || s.StockCode.StartsWith("60")).ToList();
-                progress?.Report($"首板回落策略：过滤后保留 {stocks.Count}/{originalCount} 只股票");
-            }
-
-            // 3. 加载日线数据
+            // 1. 加载日线数据（用于交易日历和卖出逻辑）
             progress?.Report("加载日线数据...");
             var allDailyData = await _dailyDataRepo.GetByDateRangeAsync(
                 startDate.AddDays(-200),
@@ -521,10 +505,10 @@ public class BacktestEngine
 
             var dailyDataByStock = allDailyData.ToLookup(d => d.StockID);
 
-            // 4. 手动计算技术指标（不依赖数据库）
+            // 2. 手动计算技术指标（不依赖数据库，用于卖出逻辑）
             progress?.Report("计算技术指标...");
             var indicatorsByStock = new Dictionary<string, List<StockDailyIndicator>>();
-            var stocksDict = stocks.ToDictionary(s => s.StockID);
+            var stocks = await _stockRepo.GetAllAsync();
 
             foreach (var stock in stocks)
             {
@@ -536,7 +520,21 @@ public class BacktestEngine
                 indicatorsByStock[stock.StockID] = indicators;
             }
 
-            // 5. 创建策略实例
+            // 3. 获取交易日历
+            var tradingDays = dailyDataByStock
+                .SelectMany(d => d)
+                .Where(d => d.TradeDate >= startDate && d.TradeDate <= endDate)
+                .Select(d => d.TradeDate.Date)
+                .Distinct()
+                .OrderBy(d => d)
+                .ToList();
+
+            progress?.Report($"回测区间: {startDate:yyyy-MM-dd} 到 {endDate:yyyy-MM-dd}, 共 {tradingDays.Count} 个交易日");
+            result.TradingDays = tradingDays.Count;
+
+            // 4. 加载策略实例（用于卖出逻辑）
+            progress?.Report($"加载 {settings.StrategyIds!.Count} 个策略...");
+            var strategies = await _strategyRepo.GetByIdsAsync(settings.StrategyIds);
             var strategyInstances = new List<Strategies.IStrategy>();
             foreach (var strategy in strategies)
             {
@@ -554,178 +552,71 @@ public class BacktestEngine
                 return result;
             }
 
-            // 6. 获取交易日历
-            var tradingDays = dailyDataByStock
-                .SelectMany(d => d)
-                .Where(d => d.TradeDate >= startDate && d.TradeDate <= endDate)
-                .Select(d => d.TradeDate.Date)
-                .Distinct()
-                .OrderBy(d => d)
-                .ToList();
-
-            progress?.Report($"回测区间: {startDate:yyyy-MM-dd} 到 {endDate:yyyy-MM-dd}, 共 {tradingDays.Count} 个交易日");
-            result.TradingDays = tradingDays.Count;
-
+            // 5. 遍历每个交易日，调用每日选股逻辑
             progress?.Report("开始回测...");
             var trades = new List<TradeRecord>();
             var stopLossPercent = -5m;
-
-            // 6. 遍历每个交易日
-            var buySignals = new List<Strategies.Signal>();
+            var stocksDict = stocks.ToDictionary(s => s.StockID);
 
             foreach (var tradeDate in tradingDays)
             {
                 progress?.Report($"处理交易日: {tradeDate:yyyy-MM-dd}");
 
-                var boughtStockIds = new HashSet<string>(); // 防止同一天重复买入同一只股票
+                // 检查是否有未平仓的持仓
+                var openPositions = trades.Where(t => !t.SellDate.HasValue).ToList();
+                bool hasOpenPositions = openPositions.Any();
 
-                // 使用OR逻辑组合所有策略（与每日选股保持一致）
-                // 每个策略独立选股，每个策略选出的股票都会被添加到买入列表
-                foreach (var strategyInstance in strategyInstances)
+                // 如果没有持仓，才进行选股和买入
+                if (!hasOpenPositions)
                 {
-                    foreach (var stock in stocks)
+                    // 直接调用每日选股逻辑（与每日选股功能完全一致）
+                    var pickResults = await _dailyPicker.PickAsync(
+                        tradeDate,
+                        settings.StrategyIds,
+                        useDeepSeek: false,
+                        progress);
+
+                    if (pickResults.Count > 0)
                     {
-                        // 检查是否已经买入过这只股票
-                        if (boughtStockIds.Contains(stock.StockID)) continue;
+                        // 从选股结果中选择评分最高的股票
+                        var topPick = pickResults.OrderByDescending(r => r.FinalScore).First();
 
-                        if (!dailyDataByStock.Contains(stock.StockID)) continue;
-
-                        var dailyData = dailyDataByStock[stock.StockID].ToList();
-                        if (dailyData.Count == 0) continue;
-
-                        if (!indicatorsByStock.ContainsKey(stock.StockID)) continue;
-                        var indicators = indicatorsByStock[stock.StockID];
-
-                        // 生成该策略的买入信号
-                        var signals = strategyInstance.GenerateSignals(
-                            stock.StockID,
-                            dailyData.Where(d => d.TradeDate <= tradeDate).ToList(),
-                            indicators.Where(i => i.TradeDate.Date == tradeDate.Date).ToList());
-
-                        var buySignal = signals.FirstOrDefault(s => s.Type == Strategies.SignalType.Buy);
-
-                        // 只要该策略发出买入信号，就买入
-                        if (buySignal != null)
-                        {
-                            var signal = new Strategies.Signal
-                            {
-                                StockId = stock.StockID,
-                                Type = Strategies.SignalType.Buy,
-                                Date = tradeDate
-                            };
-                            buySignals.Add(signal);
-                            boughtStockIds.Add(stock.StockID); // 标记为已买入
-                        }
-                    }
-                }
-
-                // 7. 执行买入（每天只买入评分最高的1只股票）
-                if (buySignals.Count > 0)
-                {
-                    // 计算每只股票的综合评分（与每日选股保持一致）
-                    var scoredSignals = new List<(Strategies.Signal Signal, decimal Score)>();
-                    
-                    foreach (var signal in buySignals)
-                    {
-                        var tradeStockData = dailyDataByStock[signal.StockId]
+                        var stockData = dailyDataByStock[topPick.StockId]
                             .FirstOrDefault(d => d.TradeDate == tradeDate);
 
-                        var tradeStock = stocksDict.GetValueOrDefault(signal.StockId);
-                        if (tradeStockData == null || tradeStock == null)
-                            continue;
+                        if (stockData != null)
+                        {
+                            var buyPrice = stockData.ClosePrice * (1 + settings.Slippage);
+                            var trade = new TradeRecord
+                            {
+                                StockId = topPick.StockId,
+                                StockCode = topPick.StockCode,
+                                StockName = topPick.StockName,
+                                StrategyName = string.Join(" + ", strategyInstances.Select(s => s.Name)),
+                                BuyDate = tradeDate,
+                                BuyPrice = buyPrice,
+                                Shares = settings.SharesPerPick
+                            };
 
-                        // DeepSeek评分（如果没有则70分）- 权重40%
-                        var deepSeekScore = tradeStock.CirculationValue.HasValue ? 70m : 70m;
-                        
-                        // 技术指标评分（权重30%）
-                        var technicalScore = 0m;
-                        
-                        // 涨跌幅评分（权重20%）
-                        var marketScore = 0m;
-                        var changePercent = tradeStockData.ChangePercent ?? 0m;
-                        
-                        if (changePercent >= 1m && changePercent <= 5m)
-                        {
-                            marketScore += 0.8m * 20m; // 适中涨幅
+                            trades.Add(trade);
+                            progress?.Report($"买入: {topPick.StockCode} {topPick.StockName} 评分:{topPick.FinalScore:F2} 价格:{buyPrice:F2}");
                         }
-                        else if (changePercent >= 0m && changePercent < 1m)
-                        {
-                            marketScore += 0.6m * 20m; // 小幅上涨
-                        }
-                        else if (changePercent > 5m && changePercent <= 8m)
-                        {
-                            marketScore += 0.5m * 20m; // 涨幅较大
-                        }
-                        else if (changePercent < 0m && changePercent >= -3m)
-                        {
-                            marketScore += 0.4m * 20m; // 小幅下跌可能是洗盘
-                        }
-                        else if (changePercent < -3m)
-                        {
-                            marketScore += 0.3m * 20m; // 大幅下跌
-                        }
-                        
-                        // 换手率评分（权重20%的一部分）
-                        if (tradeStockData.TurnoverRate.HasValue)
-                        {
-                            var turnover = tradeStockData.TurnoverRate.Value;
-                            if (turnover >= 2m && turnover <= 10m)
-                            {
-                                marketScore += 0.2m * 20m; // 换手率适中
-                            }
-                            else if (turnover > 10m)
-                            {
-                                marketScore += 0.1m * 20m; // 换手率过高可能是炒作
-                            }
-                        }
-                        
-                        // 策略信号数量评分（权重10%）
-                        // 由于我们每天只买一次，所以这个评分都是一样的，可以忽略或给固定分
-                        
-                        // 最终得分
-                        var finalScore = deepSeekScore + technicalScore + marketScore;
-                        
-                        scoredSignals.Add((signal, finalScore));
                     }
-                    
-                    // 按综合评分降序排列
-                    scoredSignals = scoredSignals.OrderByDescending(x => x.Score).ToList();
-
-                    // 只买入排名第一的股票
-                    var topSignal = scoredSignals.First().Signal;
-
-                    var stockData = dailyDataByStock[topSignal.StockId]
-                        .FirstOrDefault(d => d.TradeDate == tradeDate);
-
-                    if (stockData == null) continue;
-
-                    var stock = stocksDict.GetValueOrDefault(topSignal.StockId);
-                    if (stock == null) continue;
-
-                    var buyPrice = stockData.ClosePrice * (1 + settings.Slippage);
-                    var trade = new TradeRecord
+                    else
                     {
-                        StockId = topSignal.StockId,
-                        StockCode = stock.StockCode,
-                        StockName = stock.StockName,
-                        StrategyName = string.Join(" + ", strategyInstances.Select(s => s.Name)),
-                        BuyDate = tradeDate,
-                        BuyPrice = buyPrice,
-                        Shares = settings.SharesPerPick
-                    };
-
-                    trades.Add(trade);
+                        progress?.Report($"当日无选股结果");
+                    }
                 }
 
-                    // 8. 检查卖出
-                    await CheckSellSignalsForStrategyBacktestAsync(
-                        tradeDate,
-                        trades,
-                        strategyInstances,
-                        settings,
-                        dailyDataByStock,
-                        indicatorsByStock,
-                        stopLossPercent);
+                // 6. 检查卖出
+                await CheckSellSignalsForStrategyBacktestAsync(
+                    tradeDate,
+                    trades,
+                    strategyInstances,
+                    settings,
+                    dailyDataByStock,
+                    indicatorsByStock,
+                    stopLossPercent);
             }
 
             result.Trades = trades;
