@@ -170,15 +170,15 @@ public class DailyPicker
             // 批量获取所有股票的日线数据
             var allDailyData = await _dailyDataRepo.GetByDateRangeAsync(startDate, actualTradeDate);
             
-            // 优化：如果是首板回落策略，先过滤掉不以60和00开头的股票
-            List<string> filteredStockIds = stocks.Select(s => s.Id).ToList();
+            // 优化：如果是首板回落策略，先过滤掉不以60和00开头的股票（使用StockCode字段）
+            List<string> filteredStockCodes = stocks.Select(s => s.StockCode).ToList();
             if (isOnlyFirstBoardPullback)
             {
-                filteredStockIds = filteredStockIds.Where(id => id.Length >= 2 && (id.StartsWith("00") || id.StartsWith("60"))).ToList();
-                progress?.Report($"首板回落策略：过滤后保留 {filteredStockIds.Count}/{stocks.Count} 只股票");
+                filteredStockCodes = filteredStockCodes.Where(code => code.StartsWith("00") || code.StartsWith("60")).ToList();
+                progress?.Report($"首板回落策略：过滤后保留 {filteredStockCodes.Count}/{stocks.Count} 只股票");
             }
             
-            var stockIdSet = new HashSet<string>(filteredStockIds);
+            var stockCodeSet = new HashSet<string>(filteredStockCodes);
             
             // 批量获取所有股票的技术指标
             var allIndicators = await _indicatorRepo.GetByDateRangeAsync(startDate, actualTradeDate);
@@ -190,10 +190,10 @@ public class DailyPicker
             // 构建结果字典
             foreach (var stock in stocks)
             {
-                // 如果是首板回落策略且股票代码不符合条件，跳过
+                // 如果是首板回落策略且股票代码不符合条件，跳过（使用StockCode字段）
                 if (isOnlyFirstBoardPullback)
                 {
-                    if (stock.Id.Length < 2 || (stock.Id.Substring(0, 2) != "00" && stock.Id.Substring(0, 2) != "60"))
+                    if (!stock.StockCode.StartsWith("00") && !stock.StockCode.StartsWith("60"))
                     {
                         continue;
                     }
@@ -202,29 +202,29 @@ public class DailyPicker
                 try
                 {
                     // 从内存中获取该股票的数据
-                    var dailyData = dailyDataByStockLookup[stock.Id].ToList();
+                    var dailyData = dailyDataByStockLookup[stock.StockID].ToList();
                     
                     if (dailyData.Count == 0)
                         continue;
 
-                    dailyDataByStock[stock.Id] = dailyData;
+                    dailyDataByStock[stock.StockID] = dailyData;
 
                     // 从内存中获取该股票的指标
-                    var indicators = indicatorsByStockLookup[stock.Id].ToList();
+                    var indicators = indicatorsByStockLookup[stock.StockID].ToList();
 
                     if (indicators.Count == 0)
                     {
                         // 没有预计算的指标，现场计算
-                        indicators = Indicators.IndicatorCalculator.CalculateAll(stock.Id, dailyData);
+                        indicators = Indicators.IndicatorCalculator.CalculateAll(stock.StockID, dailyData);
                     }
 
-                    indicatorsByStock[stock.Id] = indicators;
+                    indicatorsByStock[stock.StockID] = indicators;
                 }
                 catch (Exception ex)
                 {
                     ErrorLogger.Log(ex, 
-                        $"Method: PickAsync | Data Loading | Stock: {stock.Id} {stock.StockCode} | TradeDate: {tradeDate:yyyy-MM-dd}", 
-                        new { StockId = stock.Id, StockCode = stock.StockCode, StockName = stock.StockName, TradeDate = tradeDate });
+                        $"Method: PickAsync | Data Loading | Stock: {stock.StockID} {stock.StockCode} | TradeDate: {tradeDate:yyyy-MM-dd}", 
+                        new { StockId = stock.StockID, StockCode = stock.StockCode, StockName = stock.StockName, TradeDate = tradeDate });
                     // 继续处理其他股票
                 }
             }
