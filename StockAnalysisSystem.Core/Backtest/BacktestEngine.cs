@@ -970,8 +970,9 @@ public class BacktestEngine
 
             // 新的卖出逻辑
             // 1. 持仓第1天（买入当天）：不做任何卖出判断（除非止损）
-            // 2. 持仓第2天：如果上涨且未涨停，卖出
-            // 3. 持仓第3天：如果没有涨停，卖出
+            // 2. 持仓第2天：如果上涨但未涨停，卖出
+            // 3. 持仓第3天：无论涨跌，都卖出（即使涨停也卖出）
+            // 4. 止损优先：任何交易日如果亏损超过5%，立即止损卖出
 
             // 先检查止损（所有交易日都检查）
             if (profitLossPercent <= stopLossPercent)
@@ -979,6 +980,41 @@ public class BacktestEngine
                 trade.SellDate = tradeDate;
                 trade.SellPrice = currentPrice * (1 - settings.Slippage);
                 trade.SellReason = $"止损({stopLossPercent:F1}%)";
+
+                var buyAmount = buyPrice * trade.Shares;
+                var sellAmount = trade.SellPrice.Value * trade.Shares;
+                trade.Commission = (buyAmount + sellAmount) * settings.Commission;
+                trade.ProfitLoss = sellAmount - buyAmount - trade.Commission;
+                trade.ProfitLossPercent = trade.ProfitLoss / buyAmount * 100;
+                trade.HoldingDays = (trade.SellDate.Value - trade.BuyDate).Days;
+                continue;
+            }
+
+            // 持仓第2天：如果上涨但未涨停，卖出
+            if (holdingDays == 1)
+            {
+                if (profitLossPercent > 0 && profitLossPercent < limitUpPercent)
+                {
+                    trade.SellDate = tradeDate;
+                    trade.SellPrice = currentPrice * (1 - settings.Slippage);
+                    trade.SellReason = $"第2天上涨未涨停(涨幅:{profitLossPercent:F2}%)";
+
+                    var buyAmount = buyPrice * trade.Shares;
+                    var sellAmount = trade.SellPrice.Value * trade.Shares;
+                    trade.Commission = (buyAmount + sellAmount) * settings.Commission;
+                    trade.ProfitLoss = sellAmount - buyAmount - trade.Commission;
+                    trade.ProfitLossPercent = trade.ProfitLoss / buyAmount * 100;
+                    trade.HoldingDays = (trade.SellDate.Value - trade.BuyDate).Days;
+                    continue;
+                }
+            }
+
+            // 持仓第3天：无论涨跌，都卖出（强制卖出，最多持有3天）
+            if (holdingDays == 2)
+            {
+                trade.SellDate = tradeDate;
+                trade.SellPrice = currentPrice * (1 - settings.Slippage);
+                trade.SellReason = $"第3天强制卖出(涨幅:{profitLossPercent:F2}%)";
 
                 var buyAmount = buyPrice * trade.Shares;
                 var sellAmount = trade.SellPrice.Value * trade.Shares;
