@@ -633,8 +633,11 @@ public class FirstBoardPullbackStrategy : IStrategy
             // 计算当前价格与首板最低价的偏差
             decimal deviation = (data.ClosePrice - firstLimitUpLowPrice.Value) / firstLimitUpLowPrice.Value;
 
-            // 判断是否在回落范围内（-pullbackRange 到 +pullbackRange）
-            if (deviation >= -pullbackRange && deviation <= pullbackRange)
+            // 判断是否回落到首板最低价附近（价格接近或略低于首板最低价）
+            // - 不能远高于首板最低价（最多允许高于 pullbackRange/2，即2.5%）
+            // - 可以略低于首板最低价（最多允许低于 pullbackRange，即5%）
+            // 这样确保是"回落到"最低价附近，而不是在较高位置
+            if (deviation >= -pullbackRange && deviation <= pullbackRange / 2)
             {
                 // 根据天数计算评分：天数越少，评分越高
                 // 评分范围：0.5-1.0
