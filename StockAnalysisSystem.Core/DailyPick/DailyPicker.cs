@@ -156,8 +156,16 @@ public class DailyPicker
             progress?.Report($"加载 {stocks.Count} 只股票的数据...");
 
             // 优化：批量查询日线数据（2次查询替代2N次查询）
-            // 注意：计算120日均线需要至少120天数据，为了安全起见，获取150天数据
-            var startDate = actualTradeDate.AddDays(-200);
+            // 注意：根据策略类型决定加载天数
+            // - 单独使用首板后回落策略：只需要30天
+            // - 使用其他策略或组合策略：计算120日均线需要至少120天数据，为了安全起见，获取200天数据
+            var isOnlyFirstBoardPullback = strategies.Count == 1 && strategies.First().StrategyType == "FirstBoardPullback";
+            var startDate = isOnlyFirstBoardPullback
+                ? actualTradeDate.AddDays(-30)
+                : actualTradeDate.AddDays(-200);
+
+            var loadingDays = isOnlyFirstBoardPullback ? 30 : 200;
+            progress?.Report($"加载最近 {loadingDays} 天的数据...");
 
             // 批量获取所有股票的日线数据
             var allDailyData = await _dailyDataRepo.GetByDateRangeAsync(startDate, actualTradeDate);
