@@ -13,7 +13,8 @@ public class StrategyFactory
         ["MACDCross"] = typeof(MACDCrossStrategy),
         ["RSIOverSold"] = typeof(RSIOverSoldStrategy),
         ["Combined"] = typeof(CombinedStrategy),
-        ["MultiMovingAverage"] = typeof(MultiMovingAverageStrategy)
+        ["MultiMovingAverage"] = typeof(MultiMovingAverageStrategy),
+        ["FirstBoardPullback"] = typeof(FirstBoardPullbackStrategy)
     };
 
     /// <summary>

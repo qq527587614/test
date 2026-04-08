@@ -557,3 +557,104 @@ public class MultiMovingAverageStrategy : IStrategy
         return result;
     }
 }
+
+/// <summary>
+/// 首板后回落策略
+/// 1. 识别首板（第一次涨停）并记录最低价
+/// 2. 在首板后，股价回落到首板最低价附近时发出买入信号
+/// 3. 根据距离首板的天数评分，天数越少评分越高
+/// </summary>
+public class FirstBoardPullbackStrategy : IStrategy
+{
+    public string Name => "首板后回落策略";
+    public string StrategyType => "FirstBoardPullback";
+    public Dictionary<string, object> Parameters { get; set; } = new()
+    {
+        ["LimitUpThreshold"] = 9.95m,  // 涨停阈值
+        ["PullbackRange"] = 0.05m,       // 回落范围（5%）
+        ["MaxDaysAfterLimitUp"] = 30,      // 首板后最大天数（30天内有效）
+        ["MinDaysAfterLimitUp"] = 3        // 首板后最小天数（至少3天后才选）
+    };
+
+    public List<Signal> GenerateSignals(string stockId, List<StockDailyData> dailyData, List<StockDailyIndicator> indicators)
+    {
+        var result = new List<Signal>();
+
+        if (dailyData.Count < 10)
+            return result;
+
+        var limitUpThreshold = StrategyParameterHelper.GetDecimalValue(Parameters["LimitUpThreshold"], 9.95m);
+        var pullbackRange = StrategyParameterHelper.GetDecimalValue(Parameters["PullbackRange"], 0.05m);
+        var maxDaysAfterLimitUp = StrategyParameterHelper.GetIntValue(Parameters["MaxDaysAfterLimitUp"], 30);
+        var minDaysAfterLimitUp = StrategyParameterHelper.GetIntValue(Parameters["MinDaysAfterLimitUp"], 3);
+
+        // 记录首板信息
+        DateTime? firstLimitUpDate = null;
+        decimal? firstLimitUpLowPrice = null;
+
+        // 第一遍：识别首板
+        for (int i = 0; i < dailyData.Count; i++)
+        {
+            var data = dailyData[i];
+
+            // 如果涨幅超过阈值，认为是涨停
+            if (data.ChangePercent.HasValue && data.ChangePercent.Value >= limitUpThreshold)
+            {
+                firstLimitUpDate = data.TradeDate;
+                firstLimitUpLowPrice = data.LowPrice;
+                break;  // 找到首板就退出
+            }
+        }
+
+        // 如果没有首板，返回空信号
+        if (!firstLimitUpDate.HasValue || !firstLimitUpLowPrice.HasValue)
+            return result;
+
+        // 第二遍：在首板后寻找回落买入机会
+        for (int i = 0; i < dailyData.Count; i++)
+        {
+            var data = dailyData[i];
+
+            // 只检查首板后的数据
+            if (data.TradeDate <= firstLimitUpDate.Value)
+                continue;
+
+            // 计算距离首板的天数
+            int daysAfterLimitUp = (data.TradeDate - firstLimitUpDate.Value).Days;
+
+            // 超过最大天数，停止检查
+            if (daysAfterLimitUp > maxDaysAfterLimitUp)
+                continue;
+
+            // 至少需要等待几天，避免首板当天追高
+            if (daysAfterLimitUp < minDaysAfterLimitUp)
+                continue;
+
+            // 计算当前价格与首板最低价的偏差
+            decimal deviation = (data.ClosePrice - firstLimitUpLowPrice.Value) / firstLimitUpLowPrice.Value;
+
+            // 判断是否在回落范围内（-pullbackRange 到 +pullbackRange）
+            if (deviation >= -pullbackRange && deviation <= pullbackRange)
+            {
+                // 根据天数计算评分：天数越少，评分越高
+                // 评分范围：0.5-1.0
+                decimal daysFactor = 1.0m - ((decimal)daysAfterLimitUp / (decimal)maxDaysAfterLimitUp) * 0.5m;
+                decimal strength = Math.Max(0.5m, daysFactor);
+
+                result.Add(new Signal
+                {
+                    Date = data.TradeDate,
+                    StockId = stockId,
+                    Type = SignalType.Buy,
+                    Reason = $"首板后回落, 首板日期:{firstLimitUpDate.Value:yyyy-MM-dd}, 首板最低价:{firstLimitUpLowPrice.Value:F2}, 距首板{daysAfterLimitUp}天, 当前价:{data.ClosePrice:F2}, 偏差:{deviation*100:F2}%",
+                    Strength = strength
+                });
+
+                // 每个交易日最多发出一个信号
+                break;
+            }
+        }
+
+        return result;
+    }
+}
