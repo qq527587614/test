@@ -619,31 +619,46 @@ public class BacktestEngine
                     }
                 }
 
-                    // 7. 执行买入
-                    foreach (var signal in buySignals)
+                // 7. 执行买入（每天只买入评分最高的1只股票）
+                if (buySignals.Count > 0)
+                {
+                    // 计算每只股票的评分（基于涨跌幅）
+                    var scoredSignals = buySignals.Select(signal =>
                     {
                         var stockData = dailyDataByStock[signal.StockId]
                             .FirstOrDefault(d => d.TradeDate == tradeDate);
 
-                        if (stockData == null) continue;
+                        var score = stockData?.ChangePercent ?? 0m; // 使用涨跌幅作为评分
+                        return new { Signal = signal, Score = score };
+                    })
+                    .OrderByDescending(x => x.Score) // 按涨跌幅降序排列
+                    .ToList();
 
-                        var stock = stocksDict.GetValueOrDefault(signal.StockId);
-                        if (stock == null) continue;
+                    // 只买入排名第一的股票
+                    var topSignal = scoredSignals.First();
 
-                        var buyPrice = stockData.ClosePrice * (1 + settings.Slippage);
-                        var trade = new TradeRecord
-                        {
-                            StockId = signal.StockId,
-                            StockCode = stock.StockCode,
-                            StockName = stock.StockName,
-                            StrategyName = string.Join(" + ", strategyInstances.Select(s => s.Name)),
-                            BuyDate = tradeDate,
-                            BuyPrice = buyPrice,
-                            Shares = settings.SharesPerPick
-                        };
+                    var stockData = dailyDataByStock[topSignal.Signal.StockId]
+                        .FirstOrDefault(d => d.TradeDate == tradeDate);
 
-                        trades.Add(trade);
-                    }
+                    if (stockData == null) continue;
+
+                    var stock = stocksDict.GetValueOrDefault(topSignal.Signal.StockId);
+                    if (stock == null) continue;
+
+                    var buyPrice = stockData.ClosePrice * (1 + settings.Slippage);
+                    var trade = new TradeRecord
+                    {
+                        StockId = topSignal.Signal.StockId,
+                        StockCode = stock.StockCode,
+                        StockName = stock.StockName,
+                        StrategyName = string.Join(" + ", strategyInstances.Select(s => s.Name)),
+                        BuyDate = tradeDate,
+                        BuyPrice = buyPrice,
+                        Shares = settings.SharesPerPick
+                    };
+
+                    trades.Add(trade);
+                }
 
                     // 8. 检查卖出
                     await CheckSellSignalsForStrategyBacktestAsync(
