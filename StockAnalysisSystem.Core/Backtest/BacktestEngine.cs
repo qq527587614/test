@@ -571,72 +571,89 @@ public class BacktestEngine
             var stopLossPercent = -5m;
 
             // 6. 遍历每个交易日
+            var buySignals = new List<Strategies.Signal>();
+
             foreach (var tradeDate in tradingDays)
             {
                 progress?.Report($"处理交易日: {tradeDate:yyyy-MM-dd}");
 
-                // 获取该交易日所有股票的买入信号
-                var buySignals = new List<Strategies.Signal>();
+                var boughtStockIds = new HashSet<string>(); // 防止同一天重复买入同一只股票
 
-                foreach (var stock in stocks)
+                // 使用OR逻辑组合所有策略（与每日选股保持一致）
+                // 每个策略独立选股，每个策略选出的股票都会被添加到买入列表
+                foreach (var strategyInstance in strategyInstances)
                 {
-                    if (!dailyDataByStock.Contains(stock.StockID)) continue;
-
-                    var dailyData = dailyDataByStock[stock.StockID].ToList();
-                    if (dailyData.Count == 0) continue;
-
-                    if (!indicatorsByStock.ContainsKey(stock.StockID)) continue;
-                    var indicators = indicatorsByStock[stock.StockID];
-
-                    // 使用AND逻辑组合所有策略
-                    var combinedSignal = await CombineStrategiesAsync(
-                        strategyInstances,
-                        stock,
-                        dailyData,
-                        indicators,
-                        tradeDate);
-
-                    if (combinedSignal != null && combinedSignal.Type == Strategies.SignalType.Buy)
+                    foreach (var stock in stocks)
                     {
-                        buySignals.Add(combinedSignal);
+                        // 检查是否已经买入过这只股票
+                        if (boughtStockIds.Contains(stock.StockID)) continue;
+
+                        if (!dailyDataByStock.Contains(stock.StockID)) continue;
+
+                        var dailyData = dailyDataByStock[stock.StockID].ToList();
+                        if (dailyData.Count == 0) continue;
+
+                        if (!indicatorsByStock.ContainsKey(stock.StockID)) continue;
+                        var indicators = indicatorsByStock[stock.StockID];
+
+                        // 生成该策略的买入信号
+                        var signals = strategyInstance.GenerateSignals(
+                            stock.StockID,
+                            dailyData.Where(d => d.TradeDate <= tradeDate).ToList(),
+                            indicators.Where(i => i.TradeDate.Date == tradeDate.Date).ToList());
+
+                        var buySignal = signals.FirstOrDefault(s => s.Type == Strategies.SignalType.Buy);
+
+                        // 只要该策略发出买入信号，就买入
+                        if (buySignal != null)
+                        {
+                            var signal = new Strategies.Signal
+                            {
+                                StockId = stock.StockID,
+                                Type = Strategies.SignalType.Buy,
+                                Date = tradeDate
+                            };
+                            buySignals.Add(signal);
+                            boughtStockIds.Add(stock.StockID); // 标记为已买入
+                        }
                     }
                 }
 
-                // 7. 执行买入
-                foreach (var signal in buySignals)
-                {
-                    var stockData = dailyDataByStock[signal.StockId]
-                        .FirstOrDefault(d => d.TradeDate == tradeDate);
-
-                    if (stockData == null) continue;
-
-                    var stock = stocksDict.GetValueOrDefault(signal.StockId);
-                    if (stock == null) continue;
-
-                    var buyPrice = stockData.ClosePrice * (1 + settings.Slippage);
-                    var trade = new TradeRecord
+                    // 7. 执行买入
+                    foreach (var signal in buySignals)
                     {
-                        StockId = signal.StockId,
-                        StockCode = stock.StockCode,
-                        StockName = stock.StockName,
-                        StrategyName = string.Join(" + ", strategyInstances.Select(s => s.Name)),
-                        BuyDate = tradeDate,
-                        BuyPrice = buyPrice,
-                        Shares = settings.SharesPerPick
-                    };
+                        var stockData = dailyDataByStock[signal.StockId]
+                            .FirstOrDefault(d => d.TradeDate == tradeDate);
 
-                    trades.Add(trade);
-                }
+                        if (stockData == null) continue;
 
-                // 8. 检查卖出
-                await CheckSellSignalsForStrategyBacktestAsync(
-                    tradeDate,
-                    trades,
-                    strategyInstances,
-                    settings,
-                    dailyDataByStock,
-                    indicatorsByStock,
-                    stopLossPercent);
+                        var stock = stocksDict.GetValueOrDefault(signal.StockId);
+                        if (stock == null) continue;
+
+                        var buyPrice = stockData.ClosePrice * (1 + settings.Slippage);
+                        var trade = new TradeRecord
+                        {
+                            StockId = signal.StockId,
+                            StockCode = stock.StockCode,
+                            StockName = stock.StockName,
+                            StrategyName = string.Join(" + ", strategyInstances.Select(s => s.Name)),
+                            BuyDate = tradeDate,
+                            BuyPrice = buyPrice,
+                            Shares = settings.SharesPerPick
+                        };
+
+                        trades.Add(trade);
+                    }
+
+                    // 8. 检查卖出
+                    await CheckSellSignalsForStrategyBacktestAsync(
+                        tradeDate,
+                        trades,
+                        strategyInstances,
+                        settings,
+                        dailyDataByStock,
+                        indicatorsByStock,
+                        stopLossPercent);
             }
 
             result.Trades = trades;
