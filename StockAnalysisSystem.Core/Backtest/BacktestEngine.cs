@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using StockAnalysisSystem.Core.Entities;
+using StockAnalysisSystem.Core.Indicators;
 using StockAnalysisSystem.Core.Repositories;
 using StockAnalysisSystem.Core.Strategies;
 using StockAnalysisSystem.Core.Utils;
@@ -463,11 +464,207 @@ public class BacktestEngine
         IProgress<string>? progress = null)
     {
         settings ??= new DailyPickBacktestSettings { StartDate = startDate, EndDate = endDate };
+
+        // 根据是否选择了策略，调用不同的回测方法
+        if (settings.StrategyIds != null && settings.StrategyIds.Count > 0)
+        {
+            // 模式1：组合策略回测
+            return await RunStrategyBacktestAsync(startDate, endDate, settings, progress);
+        }
+        else
+        {
+            // 模式2：历史选股记录回测
+            return await RunHistoryBacktestAsync(startDate, endDate, settings, progress);
+        }
+    }
+
+    private async Task<BacktestResult> RunStrategyBacktestAsync(
+        DateTime startDate,
+        DateTime endDate,
+        DailyPickBacktestSettings settings,
+        IProgress<string>? progress)
+    {
         var result = new BacktestResult
         {
             StartDate = startDate,
             EndDate = endDate,
-            InitialCapital = 0  // 不使用资金管理
+            InitialCapital = 0
+        };
+
+        try
+        {
+            // 1. 加载选中的策略
+            progress?.Report($"加载 {settings.StrategyIds!.Count} 个策略...");
+            var strategies = await _strategyRepo.GetByIdsAsync(settings.StrategyIds);
+
+            // 2. 加载所有股票信息
+            progress?.Report("加载股票信息...");
+            var stocks = await _stockRepo.GetAllAsync();
+
+            // 检查是否所有策略都是首板回落策略
+            var isOnlyFirstBoardPullback = strategies.Count > 0 &&
+                strategies.All(s => s.StrategyType == "FirstBoardPullback");
+
+            // 如果都是首板回落策略，过滤股票（只保留60和00开头的）
+            if (isOnlyFirstBoardPullback)
+            {
+                var originalCount = stocks.Count;
+                stocks = stocks.Where(s => s.StockCode.StartsWith("00") || s.StockCode.StartsWith("60")).ToList();
+                progress?.Report($"首板回落策略：过滤后保留 {stocks.Count}/{originalCount} 只股票");
+            }
+
+            // 3. 加载日线数据
+            progress?.Report("加载日线数据...");
+            var allDailyData = await _dailyDataRepo.GetByDateRangeAsync(
+                startDate.AddDays(-200),
+                endDate.AddDays(30));
+
+            var dailyDataByStock = allDailyData.ToLookup(d => d.StockID);
+
+            // 4. 手动计算技术指标（不依赖数据库）
+            progress?.Report("计算技术指标...");
+            var indicatorsByStock = new Dictionary<string, List<StockDailyIndicator>>();
+            var stocksDict = stocks.ToDictionary(s => s.StockID);
+
+            foreach (var stock in stocks)
+            {
+                var dailyData = dailyDataByStock[stock.StockID].ToList();
+                if (dailyData.Count == 0) continue;
+
+                // 使用IndicatorCalculator手动计算
+                var indicators = IndicatorCalculator.CalculateAll(stock.StockID, dailyData);
+                indicatorsByStock[stock.StockID] = indicators;
+            }
+
+            // 5. 创建策略实例
+            var strategyInstances = new List<Strategies.IStrategy>();
+            foreach (var strategy in strategies)
+            {
+                var strategyInstance = Strategies.StrategyFactory.CreateFromJson(
+                    strategy.StrategyType, strategy.Parameters);
+                if (strategyInstance != null)
+                {
+                    strategyInstances.Add(strategyInstance);
+                }
+            }
+
+            if (strategyInstances.Count == 0)
+            {
+                progress?.Report("没有有效的策略实例");
+                return result;
+            }
+
+            // 6. 获取交易日历
+            var tradingDays = dailyDataByStock
+                .SelectMany(d => d)
+                .Where(d => d.TradeDate >= startDate && d.TradeDate <= endDate)
+                .Select(d => d.TradeDate.Date)
+                .Distinct()
+                .OrderBy(d => d)
+                .ToList();
+
+            progress?.Report($"回测区间: {startDate:yyyy-MM-dd} 到 {endDate:yyyy-MM-dd}, 共 {tradingDays.Count} 个交易日");
+            result.TradingDays = tradingDays.Count;
+
+            progress?.Report("开始回测...");
+            var trades = new List<TradeRecord>();
+            var stopLossPercent = -5m;
+
+            // 6. 遍历每个交易日
+            foreach (var tradeDate in tradingDays)
+            {
+                progress?.Report($"处理交易日: {tradeDate:yyyy-MM-dd}");
+
+                // 获取该交易日所有股票的买入信号
+                var buySignals = new List<Strategies.Signal>();
+
+                foreach (var stock in stocks)
+                {
+                    if (!dailyDataByStock.Contains(stock.StockID)) continue;
+
+                    var dailyData = dailyDataByStock[stock.StockID].ToList();
+                    if (dailyData.Count == 0) continue;
+
+                    if (!indicatorsByStock.ContainsKey(stock.StockID)) continue;
+                    var indicators = indicatorsByStock[stock.StockID];
+
+                    // 使用AND逻辑组合所有策略
+                    var combinedSignal = await CombineStrategiesAsync(
+                        strategyInstances,
+                        stock,
+                        dailyData,
+                        indicators,
+                        tradeDate);
+
+                    if (combinedSignal != null && combinedSignal.Type == Strategies.SignalType.Buy)
+                    {
+                        buySignals.Add(combinedSignal);
+                    }
+                }
+
+                // 7. 执行买入
+                foreach (var signal in buySignals)
+                {
+                    var stockData = dailyDataByStock[signal.StockId]
+                        .FirstOrDefault(d => d.TradeDate == tradeDate);
+
+                    if (stockData == null) continue;
+
+                    var stock = stocksDict.GetValueOrDefault(signal.StockId);
+                    if (stock == null) continue;
+
+                    var buyPrice = stockData.ClosePrice * (1 + settings.Slippage);
+                    var trade = new TradeRecord
+                    {
+                        StockId = signal.StockId,
+                        StockCode = stock.StockCode,
+                        StockName = stock.StockName,
+                        StrategyName = string.Join(" + ", strategyInstances.Select(s => s.Name)),
+                        BuyDate = tradeDate,
+                        BuyPrice = buyPrice,
+                        Shares = settings.SharesPerPick
+                    };
+
+                    trades.Add(trade);
+                }
+
+                // 8. 检查卖出
+                await CheckSellSignalsForStrategyBacktestAsync(
+                    tradeDate,
+                    trades,
+                    strategyInstances,
+                    settings,
+                    dailyDataByStock,
+                    indicatorsByStock,
+                    stopLossPercent);
+            }
+
+            result.Trades = trades;
+            progress?.Report($"回测完成，共 {trades.Count} 笔交易");
+
+            // 计算绩效指标
+            CalculateDailyPickPerformanceMetrics(result);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "组合策略回测失败");
+            progress?.Report($"回测失败: {ex.Message}");
+        }
+
+        return result;
+    }
+
+    private async Task<BacktestResult> RunHistoryBacktestAsync(
+        DateTime startDate,
+        DateTime endDate,
+        DailyPickBacktestSettings settings,
+        IProgress<string>? progress)
+    {
+        var result = new BacktestResult
+        {
+            StartDate = startDate,
+            EndDate = endDate,
+            InitialCapital = 0
         };
 
         try
@@ -499,7 +696,7 @@ public class BacktestEngine
             progress?.Report("加载日线数据...");
             var allDailyData = await _dailyDataRepo.GetByDateRangeAsync(
                 startDate.AddDays(-100),
-                endDate.AddDays(30));  // 多加载一些数据，确保指标计算
+                endDate.AddDays(30));
 
             var dailyDataByStock = allDailyData.ToLookup(d => d.StockID);
 
@@ -515,7 +712,7 @@ public class BacktestEngine
             progress?.Report("开始回测...");
             var trades = new List<TradeRecord>();
             var skippedCount = 0;
-            var stopLossPercent = -5m;  // 止损5%
+            var stopLossPercent = -5m;
 
             foreach (var pick in dailyPicks)
             {
@@ -669,7 +866,7 @@ public class BacktestEngine
         }
         catch (Exception ex)
         {
-            _logger?.LogError(ex, "每日选股回测失败");
+            _logger?.LogError(ex, "历史选股记录回测失败");
             progress?.Report($"回测失败: {ex.Message}");
         }
 
@@ -720,6 +917,153 @@ public class BacktestEngine
                 (double)((totalInvested + totalProfitLoss) / totalInvested),
                 1.0 / (double)years) - 1;
             result.AnnualReturn *= 100;
+        }
+    }
+
+    private async Task<Strategies.Signal?> CombineStrategiesAsync(
+        List<Strategies.IStrategy> strategies,
+        Entities.StockInfo stock,
+        List<StockDailyData> dailyData,
+        List<StockDailyIndicator> indicators,
+        DateTime tradeDate)
+    {
+        // AND逻辑：只有当所有策略都发出买入信号时，才返回买入信号
+        foreach (var strategy in strategies)
+        {
+            var signals = strategy.GenerateSignals(
+                stock.StockID,
+                dailyData.Where(d => d.TradeDate <= tradeDate).ToList(),
+                indicators.Where(i => i.TradeDate.Date == tradeDate.Date).ToList());
+
+            var buySignal = signals.FirstOrDefault(s => s.Type == Strategies.SignalType.Buy);
+
+            // 如果某个策略没有买入信号，则组合策略也不买入
+            if (buySignal == null)
+            {
+                return null;
+            }
+        }
+
+        // 所有策略都发出了买入信号，返回买入信号
+        var stockData = dailyData.FirstOrDefault(d => d.TradeDate == tradeDate);
+        if (stockData == null) return null;
+
+        return new Strategies.Signal
+        {
+            StockId = stock.StockID,
+            Type = Strategies.SignalType.Buy,
+            Date = tradeDate
+        };
+    }
+
+    private async Task CheckSellSignalsForStrategyBacktestAsync(
+        DateTime tradeDate,
+        List<TradeRecord> trades,
+        List<Strategies.IStrategy> strategyInstances,
+        DailyPickBacktestSettings settings,
+        ILookup<string, StockDailyData> dailyDataByStock,
+        Dictionary<string, List<StockDailyIndicator>> indicatorsByStock,
+        decimal stopLossPercent)
+    {
+        // 获取未平仓的交易
+        var openTrades = trades.Where(t => !t.SellDate.HasValue).ToList();
+
+        foreach (var trade in openTrades)
+        {
+            if (!dailyDataByStock.Contains(trade.StockId)) continue;
+
+            var stockDailyData = dailyDataByStock[trade.StockId]
+                .Where(d => d.TradeDate == tradeDate)
+                .FirstOrDefault();
+
+            if (stockDailyData == null) continue;
+
+            if (!indicatorsByStock.ContainsKey(trade.StockId)) continue;
+
+            var buyPrice = trade.BuyPrice;
+            var currentPrice = stockDailyData.ClosePrice;
+            var profitLossPercent = (currentPrice - buyPrice) / buyPrice * 100;
+
+            // 检查止损
+            if (profitLossPercent <= stopLossPercent)
+            {
+                trade.SellDate = tradeDate;
+                trade.SellPrice = currentPrice * (1 - settings.Slippage);
+                trade.SellReason = $"止损({stopLossPercent:F1}%)";
+
+                var buyAmount = buyPrice * trade.Shares;
+                var sellAmount = trade.SellPrice.Value * trade.Shares;
+                trade.Commission = (buyAmount + sellAmount) * settings.Commission;
+                trade.ProfitLoss = sellAmount - buyAmount - trade.Commission;
+                trade.ProfitLossPercent = trade.ProfitLoss / buyAmount * 100;
+                trade.HoldingDays = (trade.SellDate.Value - trade.BuyDate).Days;
+                continue;
+            }
+
+            // 检查策略卖出信号
+            var stockIndicators = indicatorsByStock[trade.StockId]
+                .Where(i => i.TradeDate.Date == tradeDate.Date)
+                .ToList();
+
+            var todayIndicators = stockIndicators;
+
+            if (todayIndicators.Count > 0)
+            {
+                var allDailyData = dailyDataByStock[trade.StockId]
+                    .Where(d => d.TradeDate <= tradeDate)
+                    .OrderBy(d => d.TradeDate)
+                    .ToList();
+
+                // 检查所有策略的卖出信号
+                foreach (var strategy in strategyInstances)
+                {
+                    var signals = strategy.GenerateSignals(trade.StockId, allDailyData, todayIndicators);
+
+                    var sellSignal = signals.FirstOrDefault(s =>
+                        s.Type == Strategies.SignalType.Sell &&
+                        s.Date.Date == tradeDate.Date);
+
+                    if (sellSignal != null)
+                    {
+                        trade.SellDate = tradeDate;
+                        trade.SellPrice = stockDailyData.OpenPrice * (1 - settings.Slippage);
+                        trade.SellReason = $"策略卖出({strategy.Name})";
+
+                        var buyAmount = buyPrice * trade.Shares;
+                        var sellAmount = trade.SellPrice.Value * trade.Shares;
+                        trade.Commission = (buyAmount + sellAmount) * settings.Commission;
+                        trade.ProfitLoss = sellAmount - buyAmount - trade.Commission;
+                        trade.ProfitLossPercent = trade.ProfitLoss / buyAmount * 100;
+                        trade.HoldingDays = (trade.SellDate.Value - trade.BuyDate).Days;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 检查是否到了回测结束日期
+        if (tradeDate == settings.EndDate.Date)
+        {
+            foreach (var trade in trades.Where(t => !t.SellDate.HasValue))
+            {
+                var lastData = dailyDataByStock[trade.StockId]
+                    .Where(d => d.TradeDate == tradeDate)
+                    .FirstOrDefault();
+
+                if (lastData != null)
+                {
+                    trade.SellDate = tradeDate;
+                    trade.SellPrice = lastData.ClosePrice * (1 - settings.Slippage);
+                    trade.SellReason = "回测结束";
+
+                    var buyAmount = trade.BuyPrice * trade.Shares;
+                    var sellAmount = trade.SellPrice.Value * trade.Shares;
+                    trade.Commission = (buyAmount + sellAmount) * settings.Commission;
+                    trade.ProfitLoss = sellAmount - buyAmount - trade.Commission;
+                    trade.ProfitLossPercent = trade.ProfitLoss / buyAmount * 100;
+                    trade.HoldingDays = (trade.SellDate.Value - trade.BuyDate).Days;
+                }
+            }
         }
     }
 }
