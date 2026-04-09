@@ -46,6 +46,10 @@ public class DailyPickResult
     public decimal? RSI { get; set; }
     public bool IsGoldenCross { get; set; }  // 是否金叉
     public int SignalCount { get; set; } = 1;  // 触发信号数量
+
+    // 首板回落策略专用字段
+    public int? DaysAfterLimitUp { get; set; }  // 距离首板天数
+    public decimal? DeviationFromLimitUpLow { get; set; }  // 距离首板最低价百分比
 }
 
 /// <summary>
@@ -263,6 +267,27 @@ public class DailyPicker
 
                             if (!pickDict.ContainsKey(key))
                             {
+                                // 解析首板回落策略的特定信息
+                                int? daysAfterLimitUp = null;
+                                decimal? deviationFromLimitUpLow = null;
+
+                                if (strategy.StrategyType == "FirstBoardPullback")
+                                {
+                                    // 从Reason中解析"距首板X天"
+                                    var daysMatch = System.Text.RegularExpressions.Regex.Match(todaySignal.Reason, @"距首板(\d+)天");
+                                    if (daysMatch.Success)
+                                    {
+                                        daysAfterLimitUp = int.Parse(daysMatch.Groups[1].Value);
+                                    }
+
+                                    // 从Reason中解析"偏差:X.XX%"
+                                    var deviationMatch = System.Text.RegularExpressions.Regex.Match(todaySignal.Reason, @"偏差:([-\d.]+)%");
+                                    if (deviationMatch.Success)
+                                    {
+                                        deviationFromLimitUpLow = decimal.Parse(deviationMatch.Groups[1].Value) / 100m;
+                                    }
+                                }
+
                                 pickDict[key] = new DailyPickResult
                                 {
                                     StockId = stockId,
@@ -276,7 +301,9 @@ public class DailyPicker
                                     ChangePercent = latestData.ChangePercent ?? 0m,
                                     TurnoverRate = latestData.TurnoverRate,
                                     RSI = latestIndicator?.RSI6,
-                                    IsGoldenCross = todaySignal.Reason.Contains("金叉") || todaySignal.Reason.Contains("cross") || todaySignal.Reason.Contains("上穿")
+                                    IsGoldenCross = todaySignal.Reason.Contains("金叉") || todaySignal.Reason.Contains("cross") || todaySignal.Reason.Contains("上穿"),
+                                    DaysAfterLimitUp = daysAfterLimitUp,
+                                    DeviationFromLimitUpLow = deviationFromLimitUpLow
                                 };
                             }
                             else

@@ -205,6 +205,8 @@ namespace StockAnalysisSystem.UI.Forms;
             _dataGridView.Columns.Add("Plates", "所属板块");
             _dataGridView.Columns.Add("TodayChangePercent", "今日涨幅");
             _dataGridView.Columns.Add("TodayPrice", "今日价格");
+            _dataGridView.Columns.Add("DaysAfterLimitUp", "距首板天数");
+            _dataGridView.Columns.Add("DeviationFromLimitUpLow", "距首板最低价%");
 
             // 设置列宽
             _dataGridView.Columns["StockCode"].Width = 80;
@@ -218,6 +220,8 @@ namespace StockAnalysisSystem.UI.Forms;
             _dataGridView.Columns["Plates"].Width = 150;
             _dataGridView.Columns["TodayChangePercent"].Width = 80;
             _dataGridView.Columns["TodayPrice"].Width = 80;
+            _dataGridView.Columns["DaysAfterLimitUp"].Width = 80;
+            _dataGridView.Columns["DeviationFromLimitUpLow"].Width = 100;
         }
 
         _dataGridView.Rows.Clear();
@@ -266,7 +270,9 @@ namespace StockAnalysisSystem.UI.Forms;
                 limitUpInfo.Count > 0 ? limitUpInfo.Count.ToString() : "-",
                 !string.IsNullOrEmpty(limitUpInfo.Plates) ? limitUpInfo.Plates : "-",
                 "加载中...",  // 今日涨幅
-                "加载中..."   // 今日价格
+                "加载中...",  // 今日价格
+                r.DaysAfterLimitUp?.ToString() ?? "-",  // 距首板天数
+                r.DeviationFromLimitUpLow?.ToString("P2") ?? "-"  // 距首板最低价百分比
             );
         }
 
