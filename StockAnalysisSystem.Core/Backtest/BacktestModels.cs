@@ -23,6 +23,7 @@ public class DailyPickBacktestSettings
     public int SharesPerPick { get; set; } = 100;        // 每次选股买入股数（整手）
     public decimal Commission { get; set; } = 0.00025m;  // 手续费率
     public decimal Slippage { get; set; } = 0.001m;      // 滑点
+    public List<int>? StrategyIds { get; set; }          // 组合策略ID列表（为null时使用历史选股记录）
 }
 
 /// <summary>

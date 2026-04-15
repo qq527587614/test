@@ -32,12 +32,14 @@ public partial class BacktestForm : Form
     private NumericUpDown _numSharesPerPick = null!;
     private NumericUpDown _numPickCommission = null!;
     private NumericUpDown _numPickSlippage = null!;
+    private CheckedListBox _lstPickStrategies = null!;
     private Button _btnRunPickBacktest = null!;
     private ProgressBar _progressBarPick = null!;
     private DataGridView _dataGridViewPick = null!;
     private System.Windows.Forms.Label _lblPickResult = null!;
 
     private List<Strategy> _strategies = new();
+    private Dictionary<string, int> _strategyIdMap = new();
 
     public BacktestForm(BacktestEngine backtestEngine, IStrategyRepository strategyRepo, IServiceProvider serviceProvider)
     {
@@ -147,7 +149,7 @@ public partial class BacktestForm : Form
     private void CreatePickBacktestUI(Control parent)
     {
         // 参数设置面板
-        var settingsPanel = new GroupBox { Text = "每日选股回测参数", Dock = DockStyle.Top, Height = 100, Padding = new Padding(10) };
+        var settingsPanel = new GroupBox { Text = "每日选股回测参数", Dock = DockStyle.Top, Height = 180, Padding = new Padding(10) };
 
         int y = 25;
         var lblStart = new Label { Text = "开始日期:", Left = 20, Top = y, Width = 70 };
@@ -157,6 +159,18 @@ public partial class BacktestForm : Form
         _dtpPickEnd = new DateTimePicker { Left = 330, Top = y - 3, Width = 150, Value = DateTime.Today };
 
         y += 35;
+        var lblStrategies = new Label { Text = "选择策略:", Left = 20, Top = y, Width = 70 };
+        _lstPickStrategies = new CheckedListBox
+        {
+            Left = 90,
+            Top = y - 3,
+            Width = 600,
+            Height = 50,
+            CheckOnClick = true,
+            SelectionMode = SelectionMode.One
+        };
+
+        y += 60;
         var lblShares = new Label { Text = "买入股数:", Left = 20, Top = y, Width = 70 };
         _numSharesPerPick = new NumericUpDown { Left = 90, Top = y - 3, Width = 100, Minimum = 100, Maximum = 10000, Value = 100, Increment = 100 };
 
@@ -173,6 +187,7 @@ public partial class BacktestForm : Form
 
         settingsPanel.Controls.AddRange(new Control[] {
             lblStart, _dtpPickStart, lblEnd, _dtpPickEnd,
+            lblStrategies, _lstPickStrategies,
             lblShares, _numSharesPerPick, lblCommission, _numPickCommission, lblSlippage, _numPickSlippage,
             _btnRunPickBacktest, _progressBarPick
         });
@@ -213,9 +228,20 @@ public partial class BacktestForm : Form
         try
         {
             _strategies = await _strategyRepo.GetActiveAsync();
+            _strategyIdMap.Clear();
+
+            // 填充策略下拉框（用于策略回测）
             _cboStrategy.DisplayMember = "Name";
             _cboStrategy.ValueMember = "Id";
             _cboStrategy.DataSource = _strategies;
+
+            // 填充策略多选框（用于组合策略回测）
+            _lstPickStrategies.Items.Clear();
+            foreach (var strategy in _strategies)
+            {
+                _lstPickStrategies.Items.Add(strategy.Name);
+                _strategyIdMap[strategy.Name] = strategy.Id;
+            }
         }
         catch (Exception ex)
         {
@@ -287,13 +313,20 @@ public partial class BacktestForm : Form
 
         try
         {
+            // 获取用户选择的策略ID列表
+            var selectedStrategyIds = _lstPickStrategies.CheckedItems
+                .Cast<string>()
+                .Select(name => _strategyIdMap[name])
+                .ToList();
+
             var settings = new DailyPickBacktestSettings
             {
                 StartDate = _dtpPickStart.Value,
                 EndDate = _dtpPickEnd.Value,
                 SharesPerPick = (int)_numSharesPerPick.Value,
                 Commission = _numPickCommission.Value,
-                Slippage = _numPickSlippage.Value
+                Slippage = _numPickSlippage.Value,
+                StrategyIds = selectedStrategyIds.Count > 0 ? selectedStrategyIds : null
             };
 
             var progress = new Progress<string>(msg =>
