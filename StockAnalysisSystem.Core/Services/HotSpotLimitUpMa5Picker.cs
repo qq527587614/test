@@ -12,8 +12,8 @@ namespace StockAnalysisSystem.Core.Services;
 /// <list type="bullet">
 /// <item>涨停表近 30 个自然日内出现过涨停；</item>
 /// <item>自窗口内<strong>首次</strong>涨停日起至评估日前一交易日：用日线 <c>CurrentPrice</c>（无则 <c>ClosePrice</c>）计算 MA5，不破天数占比 ≥ 80%；</item>
-/// <item>评估日当天：必须用<strong>实时现价</strong>计算 MA5（前 4 日同口径之和 + 现价）/5，且现价不得跌破该实时 MA5；无有效实时价则剔除。</item>
-/// <item>截止评估日（含）最近两个<strong>交易日</strong>内曾在涨停表中出现过的股票剔除（避免连板追高；含评估日涨停）。</item>
+/// <item>评估日当天：<strong>开盘五日线</strong> =（前 4 日同口径收盘之和 + <strong>今开</strong>）/5；要求<strong>现价</strong>不低于该开盘五日线；无有效现价/今开则剔除。</item>
+/// <item>窗口内首板（首次涨停日）不能为评估日当天（避免首板当日入选）。</item>
 /// <item>该区间内收盘价从未低于当日 MA10；</item>
 /// <item>评估日涨停价：优先用涨停表当日 close，否则按昨收 × 涨停幅度推算；含涨停假设 MA5 =（前 4 日收盘之和 + 涨停价）/ 5。</item>
 /// </list>
@@ -107,6 +107,8 @@ public sealed class HotSpotLimitUpMa5Picker
     public async Task<List<HotSpotPickRow>> PickAsync(DateTime? asOfDate = null, IProgress<string>? progress = null)
     {
         var evalCal = (asOfDate ?? DateTime.Today).Date;
+        if (evalCal > DateTime.Today)
+            evalCal = DateTime.Today;
         var latestTrade = await _dailyRepo.GetLatestTradeDateAsync();
         if (!latestTrade.HasValue)
         {
@@ -114,8 +116,31 @@ public sealed class HotSpotLimitUpMa5Picker
             return new List<HotSpotPickRow>();
         }
 
-        var evalDate = evalCal > latestTrade.Value.Date ? latestTrade.Value.Date : evalCal;
-        evalDate = evalDate.Date;
+        // 评估日允许为“今天”（即便数据库尚未有今天日线）；当天日线不从数据库取，改用实时行情。
+        var evalDate = evalCal.Date;
+        var latestDailyTrade = latestTrade.Value.Date;
+
+        // 上一交易日：必须用「全市场日线日历」里严格小于评估日的最后一个交易日，不能简单用 GetLatestTradeDate。
+        // 否则在「库未同步到评估日」时 prev 会落在全局最新日，可能与真实 eval 前一交易日差一天，
+        // 导致 MA5/MA10 窗口与同步后（走日历分支）不一致——表现为同步今日日线前后选股结果不同。
+        var calForPrev = await _dailyRepo.GetTradeDatesAsync(evalDate.AddDays(-120), evalDate);
+        var datesBeforeEval = calForPrev
+            .Select(d => d.Date)
+            .Where(d => d < evalDate)
+            .Distinct()
+            .OrderBy(d => d)
+            .ToList();
+
+        DateTime prevTradeDate;
+        if (datesBeforeEval.Count > 0)
+            prevTradeDate = datesBeforeEval[^1];
+        else if (latestDailyTrade < evalDate)
+            prevTradeDate = latestDailyTrade;
+        else
+        {
+            progress?.Report("无法获取评估日前一交易日（日线日历不足）。");
+            return new List<HotSpotPickRow>();
+        }
         var windowStart = evalDate.AddDays(-30).Date;
         var windowEndExclusive = evalDate.AddDays(1);
 
@@ -198,8 +223,8 @@ public sealed class HotSpotLimitUpMa5Picker
         var stockIds = candidates.Select(c => c.Stock.StockID).Distinct(StringComparer.Ordinal).ToList();
         var dataLoadStart = windowStart.AddDays(-80).Date;
 
-        progress?.Report($"加载日线 {stockIds.Count} 只（并行）…");
-        var allBars = await LoadDailyBarsParallelAsync(stockIds, dataLoadStart, evalDate, progress);
+        progress?.Report($"加载日线 {stockIds.Count} 只（并行，截止 {prevTradeDate:yyyy-MM-dd}）…");
+        var allBars = await LoadDailyBarsParallelAsync(stockIds, dataLoadStart, prevTradeDate, progress);
 
         var barsById = new Dictionary<string, List<StockDailyData>>(StringComparer.Ordinal);
         foreach (var b in allBars)
@@ -219,47 +244,29 @@ public sealed class HotSpotLimitUpMa5Picker
                 kv.Value.Sort((x, y) => x.TradeDate.CompareTo(y.TradeDate));
         }
 
-        progress?.Report("获取实时行情（评估日实时 MA5）…");
-        Dictionary<string, decimal> realtimePxByCode6;
+        progress?.Report("获取实时行情（评估日开盘五日线）…");
+        Dictionary<string, RealtimeQuoteLite> realtimeByCode6;
         try
         {
             var qcodes = candidates
                 .Select(c => ToTencentQuoteCode(c.Stock.StockCode))
                 .Distinct(StringComparer.Ordinal)
                 .ToList();
-            realtimePxByCode6 = await FetchRealtimePricesBatchedAsync(qcodes).ConfigureAwait(false);
+            realtimeByCode6 = await FetchRealtimeQuotesBatchedAsync(qcodes).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             ErrorLogger.Log(ex, "HotSpotLimitUpMa5Picker.PickAsync.Realtime", "");
-            realtimePxByCode6 = new Dictionary<string, decimal>(StringComparer.Ordinal);
-        }
-
-        var tradeDatesForRecent = await _dailyRepo.GetTradeDatesAsync(evalDate.AddDays(-60), evalDate);
-        // 含评估日在内：例如评估日为 5/8 则取 5/7、5/8 两个交易日；仅排除「之前」不含当日会漏掉评估日涨停。
-        var lastTwoTradingDaysThroughEval = tradeDatesForRecent
-            .Select(d => d.Date)
-            .Where(d => d <= evalDate)
-            .Distinct()
-            .OrderBy(d => d)
-            .TakeLast(2)
-            .ToHashSet();
-
-        var code6LimitOnRecentTwoTradingDays = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var row in limitRows)
-        {
-            var k = LimitTableCodeToDailyStockCode(row.Code);
-            if (string.IsNullOrEmpty(k)) continue;
-            if (lastTwoTradingDaysThroughEval.Contains(row.AnalysisDate.Date))
-                code6LimitOnRecentTwoTradingDays.Add(k);
+            realtimeByCode6 = new Dictionary<string, RealtimeQuoteLite>(StringComparer.Ordinal);
         }
 
         var results = new List<HotSpotPickRow>();
         var missBars = 0;
         var failTrend = 0;
-        var missEval = 0;
+        var missPrevTrade = 0;
         var missRealtime = 0;
-        var skipRecentTwoLimit = 0;
+        var missOpen = 0;
+        var skipFirstLimitIsEval = 0;
         var n = candidates.Count;
         for (var i = 0; i < n; i++)
         {
@@ -267,9 +274,9 @@ public sealed class HotSpotLimitUpMa5Picker
                 progress?.Report($"筛选 {i}/{n}…");
 
             var (code6, firstLimit, nameHint, stock) = candidates[i];
-            if (code6LimitOnRecentTwoTradingDays.Contains(code6))
+            if (firstLimit.Date == evalDate)
             {
-                skipRecentTwoLimit++;
+                skipFirstLimitIsEval++;
                 continue;
             }
 
@@ -280,9 +287,9 @@ public sealed class HotSpotLimitUpMa5Picker
             }
 
             var lastIdx = bars.Count - 1;
-            if (bars[lastIdx].TradeDate.Date != evalDate)
+            if (bars[lastIdx].TradeDate.Date != prevTradeDate)
             {
-                missEval++;
+                missPrevTrade++;
                 continue;
             }
 
@@ -290,14 +297,20 @@ public sealed class HotSpotLimitUpMa5Picker
             if (anchorIdx < 0 || anchorIdx > lastIdx)
                 continue;
 
-            realtimePxByCode6.TryGetValue(stock.StockCode, out var rtPx);
-            if (rtPx <= 0m)
+            realtimeByCode6.TryGetValue(stock.StockCode, out var rq);
+            if (rq.CurrentPrice <= 0m)
             {
                 missRealtime++;
                 continue;
             }
 
-            if (!PassTrendFilters(bars, anchorIdx, lastIdx, rtPx))
+            if (rq.OpenPrice <= 0m)
+            {
+                missOpen++;
+                continue;
+            }
+
+            if (!PassTrendFilters(bars, anchorIdx, lastIdx, rq.CurrentPrice, rq.OpenPrice))
             {
                 failTrend++;
                 continue;
@@ -309,12 +322,13 @@ public sealed class HotSpotLimitUpMa5Picker
                 continue;
             }
 
+            // 开盘五日线 / 涨停MA5 口径：取“上一交易日”及其之前 3 日的收盘口径价作为前 4 日。
             var prev4CloseSum =
+                CloseLike(bars[lastIdx]) +
                 CloseLike(bars[lastIdx - 1]) +
                 CloseLike(bars[lastIdx - 2]) +
-                CloseLike(bars[lastIdx - 3]) +
-                CloseLike(bars[lastIdx - 4]);
-            var prevClose = CloseLike(bars[lastIdx - 1]);
+                CloseLike(bars[lastIdx - 3]);
+            var prevClose = CloseLike(bars[lastIdx]);
             var limitPx = ResolveTodayLimitPrice(code6, limitCloseOnEval, prevClose);
             var ma5WithLimit = (prev4CloseSum + limitPx) / 5m;
             if (ma5WithLimit <= 0)
@@ -333,21 +347,26 @@ public sealed class HotSpotLimitUpMa5Picker
                 RecentLimitUpDate = recentLimit,
                 PeriodGainPercent = periodGainPct,
                 PullbackFromPeriodHighPercent = pullbackFromHighPct,
-                LastTradeDate = bars[lastIdx].TradeDate.Date,
+                LastTradeDate = prevTradeDate,
                 TodayLimitPrice = limitPx,
                 Ma5WithTodayLimit = ma5WithLimit,
                 Prev4CloseSum = prev4CloseSum
             });
         }
 
-        progress?.Report(
-            $"完成 {results.Count} 只。未匹配代码表={missMap} 无K线={missBars} 非评估日收盘={missEval} 无实时价={missRealtime} 趋势未过={failTrend} 含评估日在内近两交易日曾涨停剔除={skipRecentTwoLimit}");
+        var tail =
+            $"完成 {results.Count} 只。未匹配代码表={missMap} 无K线={missBars} 无上一交易日K线={missPrevTrade} 无实时价={missRealtime} 无今开={missOpen} 趋势未过={failTrend} 首板为评估日剔除={skipFirstLimitIsEval}";
+        if (results.Count == 0 && skipFirstLimitIsEval > 0)
+            tail += "（提示：涨停表若含今日，窗口内「首涨停日」为今天的股票会全部剔除。）";
+        progress?.Report(tail);
         return results;
     }
 
-    private async Task<Dictionary<string, decimal>> FetchRealtimePricesBatchedAsync(List<string> qcodes)
+    private readonly record struct RealtimeQuoteLite(decimal CurrentPrice, decimal OpenPrice);
+
+    private async Task<Dictionary<string, RealtimeQuoteLite>> FetchRealtimeQuotesBatchedAsync(List<string> qcodes)
     {
-        var map = new Dictionary<string, decimal>(StringComparer.Ordinal);
+        var map = new Dictionary<string, RealtimeQuoteLite>(StringComparer.Ordinal);
         if (qcodes.Count == 0)
             return map;
 
@@ -361,7 +380,7 @@ public sealed class HotSpotLimitUpMa5Picker
             {
                 if (string.IsNullOrWhiteSpace(x.StockCode) || x.CurrentPrice <= 0m)
                     continue;
-                map[x.StockCode] = x.CurrentPrice;
+                map[x.StockCode] = new RealtimeQuoteLite(x.CurrentPrice, x.OpenPrice);
             }
         }
 
@@ -508,9 +527,14 @@ public sealed class HotSpotLimitUpMa5Picker
 
     /// <summary>
     /// MA10：区间内用日线口径价不破；
-    /// MA5：评估日<strong>之前</strong>的交易日用日线 MA5；评估日必须用 <paramref name="evalDayRealtimePx"/> 计算实时 MA5 并判定不破，且整体 MA5「不破」占比 ≥ 80%。
+    /// MA5：评估日<strong>之前</strong>的交易日用日线 MA5；评估日五日线为<strong>开盘五日线</strong>（前 4 日收盘口径 + 今开）/5，用 <paramref name="evalDayRealtimePx"/> 与该线比较判定当日不破；整体 MA5「不破」占比 ≥ 80%。
     /// </summary>
-    private static bool PassTrendFilters(List<StockDailyData> bars, int anchorIdx, int lastIdx, decimal evalDayRealtimePx)
+    private static bool PassTrendFilters(
+        List<StockDailyData> bars,
+        int anchorIdx,
+        int lastIdx,
+        decimal evalDayRealtimePx,
+        decimal evalDayOpenPx)
     {
         if (lastIdx < 9) return false;
 
@@ -534,17 +558,21 @@ public sealed class HotSpotLimitUpMa5Picker
                 ok5++;
         }
 
-        if (evalDayRealtimePx <= 0m)
+        if (evalDayRealtimePx <= 0m || evalDayOpenPx <= 0m)
             return false;
 
+        // 与 PickAsync 中 Prev4CloseSum 一致：上一交易日及其前 3 根 K 的收盘口径价 + 今开。
         var prev4 =
+            CloseLike(bars[lastIdx]) +
             CloseLike(bars[lastIdx - 1]) +
             CloseLike(bars[lastIdx - 2]) +
-            CloseLike(bars[lastIdx - 3]) +
-            CloseLike(bars[lastIdx - 4]);
-        var rtMa5 = (prev4 + evalDayRealtimePx) / 5m;
+            CloseLike(bars[lastIdx - 3]);
+        var openMa5 = (prev4 + evalDayOpenPx) / 5m;
+        if (openMa5 <= 0m)
+            return false;
+
         total5++;
-        if (evalDayRealtimePx < rtMa5)
+        if (evalDayRealtimePx < openMa5)
             return false;
         ok5++;
 

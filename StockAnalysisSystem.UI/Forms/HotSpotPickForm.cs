@@ -37,7 +37,7 @@ public class HotSpotPickForm : Form
         {
             AutoSize = false,
             Padding = new Padding(8, 8, 8, 4),
-            Text = "条件：涨停表近 30 日内有涨停；自窗口内首次涨停日起至评估日前一交易日，MA5 不破天数占比≥80%（日线口径价）；评估日当天不破 MA5 按实时现价计算的实时 MA5；区间内从未跌破 MA10（日线口径价）；截止评估日（含）最近两个交易日曾在涨停表中出现过的股票剔除（含评估日涨停）。" +
+            Text = "条件：涨停表近 30 日内有涨停；窗口内首板（首次涨停日）不能为评估日当天；自窗口内首次涨停日起至评估日前一交易日，MA5 不破天数占比≥80%（日线口径价）；评估日当天开盘五日线为（前 4 日收盘口径 + 今开）/5，要求现价不低于该线；区间内从未跌破 MA10（日线口径价）；仅显示东方财富热度排名前 200。" +
                    "排序：(实时价−涨停假设MA5)/实时价×100%，数值越小越靠前；负值表示实时价低于涨停假设五日线，该列显示为绿色。无实时行情时不参与排序，排在末尾。"
         };
 
@@ -90,9 +90,11 @@ public class HotSpotPickForm : Form
         _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "LimitPx", HeaderText = "今日涨停价", Width = 95 });
         _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Ma5", HeaderText = "含涨停假设MA5", Width = 110 });
         _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "RtPx", HeaderText = "实时价", Width = 80 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "RtOpen", HeaderText = "今开", Width = 80 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "RtVsOpenPct", HeaderText = "现价-今开%", Width = 95 });
         _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "RtPct", HeaderText = "实时涨幅%", Width = 90 });
         _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "RtLow", HeaderText = "实时最低", Width = 85 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "RtMa5", HeaderText = "实时MA5", Width = 90 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "RtMa5", HeaderText = "开盘MA5", Width = 90 });
         _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Dist", HeaderText = "距涨停MA5%", Width = 90 });
         _grid.CellFormatting += Grid_CellFormatting;
 
@@ -259,18 +261,23 @@ public class HotSpotPickForm : Form
         {
             rtDict.TryGetValue(pick.StockCode, out var rt);
             var rtPx = rt?.CurrentPrice;
-            decimal? rtMa5 = null;
-            if (rtPx.HasValue && rtPx.Value > 0)
-                rtMa5 = (pick.Prev4CloseSum + rtPx.Value) / 5m;
+            decimal? openMa5 = null;
+            if (rt != null && rt.OpenPrice > 0m)
+                openMa5 = (pick.Prev4CloseSum + rt.OpenPrice) / 5m;
 
             decimal? dist = null;
             if (rtPx.HasValue && rtPx.Value > 0)
                 dist = (rtPx.Value - pick.Ma5WithTodayLimit) / rtPx.Value * 100m;
 
             row.Cells["RtPx"].Value = rtPx.HasValue && rtPx.Value > 0 ? rtPx.Value.ToString("F2") : "-";
+            row.Cells["RtOpen"].Value = rt != null && rt.OpenPrice > 0m ? rt.OpenPrice.ToString("F2") : "-";
+            if (rtPx.HasValue && rtPx.Value > 0m && rt != null && rt.OpenPrice > 0m)
+                row.Cells["RtVsOpenPct"].Value = ((rtPx.Value - rt.OpenPrice) / rt.OpenPrice * 100m).ToString("F2");
+            else
+                row.Cells["RtVsOpenPct"].Value = "-";
             row.Cells["RtPct"].Value = rt != null ? rt.ChangePercent.ToString("F2") : "-";
             row.Cells["RtLow"].Value = rt != null ? rt.LowPrice.ToString("F2") : "-";
-            row.Cells["RtMa5"].Value = rtMa5.HasValue ? rtMa5.Value.ToString("F2") : "-";
+            row.Cells["RtMa5"].Value = openMa5.HasValue ? openMa5.Value.ToString("F2") : "-";
             row.Cells["Dist"].Value = dist.HasValue ? dist.Value.ToString("F2") : "-";
         }
 
@@ -317,6 +324,12 @@ public class HotSpotPickForm : Form
                 ErrorLogger.Log(ex, "HotSpotPickForm.RunPickAsync.HotRank", "");
                 hotRankByCode = new Dictionary<string, int>(StringComparer.Ordinal);
             }
+
+            // 仅显示热度排名前 200；不在榜单中的也不显示（避免冷门股）。
+            const int hotRankThreshold = 200;
+            rows = rows
+                .Where(r => hotRankByCode.TryGetValue(r.StockCode, out var rank) && rank > 0 && rank <= hotRankThreshold)
+                .ToList();
 
             // 批量拉取实时行情（与板块分析一致的腾讯接口）
             var rtDict = new Dictionary<string, StockAnalysisSystem.Core.RealtimeData.RealtimeStockData>(StringComparer.Ordinal);
@@ -394,8 +407,8 @@ public class HotSpotPickForm : Form
                     continue;
 
                 var rtPx = rt?.CurrentPrice;
-                var rtMa5 = (rtPx.HasValue && rtPx.Value > 0)
-                    ? (r.Prev4CloseSum + rtPx.Value) / 5m
+                var openMa5 = (rt != null && rt.OpenPrice > 0m)
+                    ? (r.Prev4CloseSum + rt.OpenPrice) / 5m
                     : (decimal?)null;
 
                 var distStr = x.Dist.HasValue ? x.Dist.Value.ToString("F2") : "-";
@@ -416,9 +429,13 @@ public class HotSpotPickForm : Form
                     r.TodayLimitPrice.ToString("F2"),
                     r.Ma5WithTodayLimit.ToString("F2"),
                     rtPx.HasValue && rtPx.Value > 0 ? rtPx.Value.ToString("F2") : "-",
+                    rt != null && rt.OpenPrice > 0m ? rt.OpenPrice.ToString("F2") : "-",
+                    (rt != null && rt.OpenPrice > 0m && rtPx.HasValue && rtPx.Value > 0m)
+                        ? ((rtPx.Value - rt.OpenPrice) / rt.OpenPrice * 100m).ToString("F2")
+                        : "-",
                     rt != null ? rt.ChangePercent.ToString("F2") : "-",
                     rt != null ? rt.LowPrice.ToString("F2") : "-",
-                    rtMa5.HasValue ? rtMa5.Value.ToString("F2") : "-",
+                    openMa5.HasValue ? openMa5.Value.ToString("F2") : "-",
                     distStr);
                 _grid.Rows[idx].Tag = new HotSpotGridRowTag
                 {
