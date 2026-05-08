@@ -7,7 +7,7 @@ using System.Text.Json;
 namespace StockAnalysisSystem.UI.Forms;
 
 /// <summary>
-/// 热点选股：按「(实时价−涨停假设MA5)/实时价×100%」升序；负值距五日线单元格显示绿色。
+/// 热点选股：默认按「热度排名」升序；负值距五日线单元格显示绿色。
 /// </summary>
 public class HotSpotPickForm : Form
 {
@@ -37,8 +37,8 @@ public class HotSpotPickForm : Form
         {
             AutoSize = false,
             Padding = new Padding(8, 8, 8, 4),
-            Text = "条件：涨停表近 30 日内有涨停；窗口内首板（首次涨停日）不能为评估日当天；自窗口内首次涨停日起至评估日前一交易日，MA5 不破天数占比≥80%（日线口径价）；评估日当天开盘五日线为（前 4 日收盘口径 + 今开）/5，要求现价不低于该线；区间内从未跌破 MA10（日线口径价）；仅显示东方财富热度排名前 200。" +
-                   "排序：(实时价−涨停假设MA5)/实时价×100%，数值越小越靠前；负值表示实时价低于涨停假设五日线，该列显示为绿色。无实时行情时不参与排序，排在末尾。"
+            Text = "条件：涨停表近 30 日内有涨停；窗口内首板（首次涨停日）不能为评估日当天；自窗口内首次涨停日起至评估日前一交易日，MA5 不破天数占比≥80%（日线口径价）；评估日当天开盘五日线为（前 4 日收盘口径 + 今开）/5，要求今开严格大于该线；区间内从未跌破 MA10（日线口径价）；仅显示东方财富热度排名前 200。" +
+                   "排序：默认按「热度排名」升序；同排名时按「距涨停MA5%」升序。负值表示实时价低于涨停假设五日线，该列显示为绿色。"
         };
 
         var panelTop = new Panel { Height = 40 };
@@ -390,9 +390,15 @@ public class HotSpotPickForm : Form
                     decimal? distRtVsLimitMa5 = null;
                     if (px > 0)
                         distRtVsLimitMa5 = (px - r.Ma5WithTodayLimit) / px * 100m;
-                    return (Row: r, Rt: rt, Dist: distRtVsLimitMa5);
+
+                    int? hotRank = null;
+                    if (hotRankByCode.TryGetValue(r.StockCode, out var hr) && hr > 0)
+                        hotRank = hr;
+
+                    return (Row: r, Rt: rt, Dist: distRtVsLimitMa5, HotRank: hotRank);
                 })
-                .OrderBy(x => x.Dist.HasValue ? x.Dist!.Value : decimal.MaxValue)
+                .OrderBy(x => x.HotRank ?? int.MaxValue)
+                .ThenBy(x => x.Dist.HasValue ? x.Dist!.Value : decimal.MaxValue)
                 .ThenBy(x => x.Row.StockCode)
                 .ToList();
 
@@ -448,7 +454,7 @@ public class HotSpotPickForm : Form
 
             void Done()
             {
-                _lblStatus.Text = $"共 {shown} 只（已过滤：实时最低价<涨停MA5；按距涨停MA5%升序；实时行情每 5 秒刷新）";
+                _lblStatus.Text = $"共 {shown} 只（已过滤：实时最低价<涨停MA5；默认按热度排名升序；实时行情每 5 秒刷新）";
                 if (shown > 0)
                     _realtimeTimer.Start();
             }
