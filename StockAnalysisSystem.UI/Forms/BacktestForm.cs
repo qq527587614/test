@@ -38,6 +38,23 @@ public partial class BacktestForm : Form
     private DataGridView _dataGridViewPick = null!;
     private System.Windows.Forms.Label _lblPickResult = null!;
 
+    private DateTimePicker _dtpFbStart = null!;
+    private DateTimePicker _dtpFbEnd = null!;
+    private NumericUpDown _numFbCapital = null!;
+    private NumericUpDown _numFbCommission = null!;
+    private NumericUpDown _numFbSlippage = null!;
+    private NumericUpDown _numFbMaxHoldSessions = null!;
+    private CheckBox _chkFbMarketFilter = null!;
+    private NumericUpDown _numFbMinUpRatio = null!;
+    private NumericUpDown _numFbMaxPicksPerDay = null!;
+    private NumericUpDown _numFbTakeProfitMin = null!;
+    private CheckedListBox _lstFbCombineStrategies = null!;
+    private Button _btnFbRun = null!;
+    private ProgressBar _progressBarFb = null!;
+    private DataGridView _dataGridViewFb = null!;
+    private FormsPlot _formsPlotFbEquity = null!;
+    private System.Windows.Forms.Label _lblFbResult = null!;
+
     private List<Strategy> _strategies = new();
     private Dictionary<string, int> _strategyIdMap = new();
 
@@ -67,6 +84,10 @@ public partial class BacktestForm : Form
         var tabPagePick = new TabPage("每日选股回测");
         CreatePickBacktestUI(tabPagePick);
         _tabControl.TabPages.Add(tabPagePick);
+
+        var tabFbPortfolio = new TabPage("首板回落(十仓)");
+        CreateFirstBoardPortfolioBacktestUI(tabFbPortfolio);
+        _tabControl.TabPages.Add(tabFbPortfolio);
 
         Controls.Add(_tabControl);
         Text = "回测系统";
@@ -223,6 +244,107 @@ public partial class BacktestForm : Form
         parent.Controls.AddRange(new Control[] { resultPanel, settingsPanel });
     }
 
+    private void CreateFirstBoardPortfolioBacktestUI(Control parent)
+    {
+        var settingsPanel = new GroupBox
+        {
+            Text = "十仓组合回测（选股逻辑 = 每日选股 · 组合选股，收盘价=CurrentPrice）",
+            Dock = DockStyle.Top,
+            Height = 232,
+            Padding = new Padding(10)
+        };
+
+        int y = 22;
+        var lblHint = new Label
+        {
+            Text = "说明：总资金 10 等份；选股与「每日选股」里「组合选股」完全一致——对下方勾选的每个策略分别执行一次选股，再取股票交集。收盘价口径统一为 CurrentPrice。支持市场过滤、每日最多买入前N、最小止盈阈值；持仓评估日若当日涨跌幅>0（上涨）则平仓。",
+            Left = 10,
+            Top = 4,
+            Width = 1120,
+            Height = 32
+        };
+
+        y = 38;
+        var lblStr = new Label { Text = "组合策略(且):", Left = 10, Top = y + 4, Width = 95 };
+        _lstFbCombineStrategies = new CheckedListBox
+        {
+            Left = 108,
+            Top = y - 2,
+            Width = 720,
+            Height = 56,
+            CheckOnClick = true
+        };
+
+        y = 102;
+        var lblStart = new Label { Text = "开始:", Left = 10, Top = y, Width = 40 };
+        _dtpFbStart = new DateTimePicker { Left = 52, Top = y - 2, Width = 130, Value = DateTime.Today.AddMonths(-3) };
+        var lblEnd = new Label { Text = "结束:", Left = 195, Top = y, Width = 40 };
+        _dtpFbEnd = new DateTimePicker { Left = 235, Top = y - 2, Width = 130, Value = DateTime.Today };
+
+        y += 32;
+        var lblCap = new Label { Text = "初始资金:", Left = 10, Top = y, Width = 70 };
+        _numFbCapital = new NumericUpDown { Left = 80, Top = y - 2, Width = 120, Minimum = 10000, Maximum = 100000000, Value = 1000000, ThousandsSeparator = true };
+        var lblComm = new Label { Text = "手续费率:", Left = 215, Top = y, Width = 70 };
+        _numFbCommission = new NumericUpDown { Left = 285, Top = y - 2, Width = 90, Minimum = 0, Maximum = 1, DecimalPlaces = 5, Increment = 0.0001m, Value = 0.00025m };
+        var lblSlp = new Label { Text = "滑点:", Left = 390, Top = y, Width = 40 };
+        _numFbSlippage = new NumericUpDown { Left = 430, Top = y - 2, Width = 80, Minimum = 0, Maximum = 1, DecimalPlaces = 4, Increment = 0.0001m, Value = 0.001m };
+        var lblHold = new Label { Text = "最长持有(交易日):", Left = 525, Top = y, Width = 115 };
+        _numFbMaxHoldSessions = new NumericUpDown { Left = 640, Top = y - 2, Width = 50, Minimum = 1, Maximum = 20, Value = 3 };
+
+        _btnFbRun = new Button { Text = "开始回测", Left = 720, Top = y - 3, Width = 100, Height = 28, BackColor = Color.MediumAquamarine };
+        _btnFbRun.Click += BtnFbPortfolioRun_Click;
+        _progressBarFb = new ProgressBar { Left = 830, Top = y, Width = 200, Height = 24 };
+
+        y += 32;
+        _chkFbMarketFilter = new CheckBox { Text = "启用市场过滤", Left = 10, Top = y + 2, Width = 100, Checked = true };
+        var lblUpRatio = new Label { Text = "上涨占比阈值:", Left = 120, Top = y + 4, Width = 90 };
+        _numFbMinUpRatio = new NumericUpDown { Left = 210, Top = y - 2, Width = 70, Minimum = 0, Maximum = 1, DecimalPlaces = 2, Increment = 0.01m, Value = 0.45m };
+        var lblMaxPicks = new Label { Text = "每日最多买入:", Left = 300, Top = y + 4, Width = 90 };
+        _numFbMaxPicksPerDay = new NumericUpDown { Left = 390, Top = y - 2, Width = 50, Minimum = 1, Maximum = 20, Value = 3 };
+        var lblTake = new Label { Text = "最小止盈(%):", Left = 460, Top = y + 4, Width = 85 };
+        _numFbTakeProfitMin = new NumericUpDown { Left = 545, Top = y - 2, Width = 60, Minimum = 0, Maximum = 20, DecimalPlaces = 1, Increment = 0.1m, Value = 1.5m };
+
+        settingsPanel.Controls.AddRange(new Control[]
+        {
+            lblHint, lblStr, _lstFbCombineStrategies,
+            lblStart, _dtpFbStart, lblEnd, _dtpFbEnd,
+            lblCap, _numFbCapital, lblComm, _numFbCommission, lblSlp, _numFbSlippage, lblHold, _numFbMaxHoldSessions,
+            _btnFbRun, _progressBarFb,
+            _chkFbMarketFilter, lblUpRatio, _numFbMinUpRatio, lblMaxPicks, _numFbMaxPicksPerDay, lblTake, _numFbTakeProfitMin
+        });
+
+        var resultPanel = new Panel { Dock = DockStyle.Fill };
+        var statsPanel = new GroupBox { Text = "回测结果", Dock = DockStyle.Top, Height = 72 };
+        _lblFbResult = new Label { Dock = DockStyle.Fill, Padding = new Padding(8), Font = new Font("Microsoft YaHei", 9.5f) };
+        statsPanel.Controls.Add(_lblFbResult);
+
+        var chartPanel = new GroupBox { Text = "权益曲线", Dock = DockStyle.Top, Height = 260 };
+        _formsPlotFbEquity = new FormsPlot { Dock = DockStyle.Fill };
+        chartPanel.Controls.Add(_formsPlotFbEquity);
+
+        var tradePanel = new GroupBox { Text = "已平仓交易", Dock = DockStyle.Fill };
+        _dataGridViewFb = new DataGridView { Dock = DockStyle.Fill, ReadOnly = true, AllowUserToAddRows = false };
+        _dataGridViewFb.Columns.Add("StockCode", "代码");
+        _dataGridViewFb.Columns.Add("StockName", "名称");
+        _dataGridViewFb.Columns.Add("StrategyName", "策略");
+        _dataGridViewFb.Columns.Add("BuyDate", "买入日");
+        _dataGridViewFb.Columns.Add("BuyPrice", "买入价");
+        _dataGridViewFb.Columns.Add("Shares", "股数");
+        _dataGridViewFb.Columns.Add("SellDate", "卖出日");
+        _dataGridViewFb.Columns.Add("SellPrice", "卖出价");
+        _dataGridViewFb.Columns.Add("ProfitLoss", "盈亏");
+        _dataGridViewFb.Columns.Add("ProfitLossPercent", "盈亏%");
+        _dataGridViewFb.Columns.Add("HoldingDays", "持有");
+        _dataGridViewFb.Columns.Add("SellReason", "卖出原因");
+        tradePanel.Controls.Add(_dataGridViewFb);
+
+        resultPanel.Controls.Add(tradePanel);
+        resultPanel.Controls.Add(chartPanel);
+        resultPanel.Controls.Add(statsPanel);
+        parent.Controls.Add(resultPanel);
+        parent.Controls.Add(settingsPanel);
+    }
+
     private async void LoadStrategies()
     {
         try
@@ -242,6 +364,8 @@ public partial class BacktestForm : Form
                 _lstPickStrategies.Items.Add(strategy.Name);
                 _strategyIdMap[strategy.Name] = strategy.Id;
             }
+
+            RefreshFbCombineStrategiesList();
         }
         catch (Exception ex)
         {
@@ -350,6 +474,110 @@ public partial class BacktestForm : Form
         }
     }
 
+    private void RefreshFbCombineStrategiesList()
+    {
+        if (_lstFbCombineStrategies == null) return;
+        _lstFbCombineStrategies.Items.Clear();
+        foreach (var strategy in _strategies)
+        {
+            var idx = _lstFbCombineStrategies.Items.Add(strategy.Name);
+            var onlyFirstBoard = string.Equals(strategy.StrategyType, "FirstBoardPullback", StringComparison.Ordinal);
+            _lstFbCombineStrategies.SetItemChecked(idx, onlyFirstBoard);
+        }
+    }
+
+    private async void BtnFbPortfolioRun_Click(object? sender, EventArgs e)
+    {
+        var combineIds = new List<int>();
+        for (var i = 0; i < _lstFbCombineStrategies.Items.Count; i++)
+        {
+            if (!_lstFbCombineStrategies.GetItemChecked(i))
+                continue;
+            var name = _lstFbCombineStrategies.Items[i]?.ToString();
+            if (string.IsNullOrEmpty(name) || !_strategyIdMap.TryGetValue(name, out var id))
+                continue;
+            combineIds.Add(id);
+        }
+
+        if (combineIds.Count == 0)
+        {
+            MessageBox.Show("请至少勾选一个策略（勾选顺序为列表从上到下，与每日选股-组合选股一致）。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        _btnFbRun.Enabled = false;
+        _progressBarFb.Style = ProgressBarStyle.Marquee;
+        _progressBarFb.MarqueeAnimationSpeed = 40;
+
+        try
+        {
+            var settings = new FirstBoardPullbackPortfolioSettings
+            {
+                StartDate = _dtpFbStart.Value.Date,
+                EndDate = _dtpFbEnd.Value.Date,
+                CombineStrategyIds = combineIds,
+                InitialCapital = _numFbCapital.Value,
+                Commission = _numFbCommission.Value,
+                Slippage = _numFbSlippage.Value,
+                MaxSlots = 10,
+                MaxHoldingSessionsAfterEntry = (int)_numFbMaxHoldSessions.Value,
+                EnableMarketFilter = _chkFbMarketFilter.Checked,
+                MinMarketUpRatio = _numFbMinUpRatio.Value,
+                MaxPicksPerDay = (int)_numFbMaxPicksPerDay.Value,
+                TakeProfitMinPercent = _numFbTakeProfitMin.Value
+            };
+
+            var progress = new Progress<string>(msg => this.Invoke(() => _lblFbResult.Text = msg));
+            var result = await _backtestEngine.RunFirstBoardPullbackPortfolioBacktestAsync(settings, progress);
+            DisplayFbPortfolioResult(result);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"回测失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            _btnFbRun.Enabled = true;
+            _progressBarFb.Style = ProgressBarStyle.Blocks;
+        }
+    }
+
+    private void DisplayFbPortfolioResult(BacktestResult result)
+    {
+        _lblFbResult.Text =
+            $"总收益率: {result.TotalReturn:F2}%  |  年化(近似): {result.AnnualReturn:F2}%  |  最大回撤: {result.MaxDrawdown:F2}%  |  夏普(近似): {result.SharpeRatio:F2}  |  " +
+            $"胜率: {result.WinRate:F1}%  |  成交笔数: {result.TradeCount}  |  期末现金: {result.FinalEquity:N2}";
+
+        _formsPlotFbEquity.Plot.Clear();
+        if (result.EquityCurve is { Count: > 0 })
+        {
+            var xs = result.EquityCurve.Select(p => p.Date.ToOADate()).ToArray();
+            var ys = result.EquityCurve.Select(p => (double)p.Equity).ToArray();
+            var scatter = _formsPlotFbEquity.Plot.Add.Scatter(xs, ys);
+            scatter.LineWidth = 2;
+            scatter.Color = new ScottPlot.Color(34, 139, 34);
+            _formsPlotFbEquity.Plot.Title("组合权益");
+            _formsPlotFbEquity.Plot.XLabel("日期");
+            _formsPlotFbEquity.Plot.YLabel("权益");
+        }
+        else
+        {
+            _formsPlotFbEquity.Plot.Title("无权益曲线");
+        }
+        _formsPlotFbEquity.Refresh();
+
+        _dataGridViewFb.Rows.Clear();
+        foreach (var t in result.Trades)
+        {
+            _dataGridViewFb.Rows.Add(
+                t.StockCode, t.StockName, t.StrategyName,
+                t.BuyDate.ToString("yyyy-MM-dd"), t.BuyPrice.ToString("F2"), t.Shares,
+                t.SellDate?.ToString("yyyy-MM-dd"), t.SellPrice?.ToString("F2"),
+                t.ProfitLoss.ToString("F2"), t.ProfitLossPercent.ToString("F2") + "%",
+                t.HoldingDays, t.SellReason);
+        }
+    }
+
     private void DisplayResult(BacktestResult result)
     {
         // 显示统计结果
@@ -401,13 +629,14 @@ public partial class BacktestForm : Form
 
     private void DisplayPickBacktestResult(BacktestResult result)
     {
+        var avgPer = result.TradeCount > 0 ? result.FinalEquity / result.TradeCount : 0m;
         // 显示统计结果
         _lblPickResult.Text = $"胜率: {result.WinRate:F1}%  |  " +
                               $"总交易次数: {result.TradeCount}  |  " +
                               $"盈利次数: {result.WinCount}  |  " +
                               $"亏损次数: {result.LossCount}  |  " +
                               $"总盈亏: {result.FinalEquity:F2}元  |  " +
-                              $"平均每笔盈亏: {result.FinalEquity / result.TradeCount:F2}元";
+                              $"平均每笔盈亏: {avgPer:F2}元";
 
         // 显示交易记录
         _dataGridViewPick.Rows.Clear();

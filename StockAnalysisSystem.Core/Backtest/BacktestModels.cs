@@ -27,6 +27,35 @@ public class DailyPickBacktestSettings
 }
 
 /// <summary>
+/// 「十等份仓位 + 盈利收盘卖 / 最多持有 N 个交易日」组合回测参数；选股与每日选股「组合选股」一致（多策略且交集）。
+/// </summary>
+public class FirstBoardPullbackPortfolioSettings
+{
+    public DateTime StartDate { get; set; }
+    public DateTime EndDate { get; set; }
+    /// <summary>
+    /// 与每日选股界面「组合选股」勾选顺序一致：对每个 Id 单独调用 <c>PickAsync(仅该策略)</c> 后取股票交集。
+    /// 仅一项时等价于单策略选股。
+    /// </summary>
+    public List<int> CombineStrategyIds { get; set; } = new();
+    public decimal InitialCapital { get; set; } = 1_000_000m;
+    public decimal Commission { get; set; } = 0.00025m;
+    public decimal Slippage { get; set; } = 0.001m;
+    /// <summary>最大同时持仓数（资金等分份数），默认 10。</summary>
+    public int MaxSlots { get; set; } = 10;
+    /// <summary>买入后第几个交易日收盘起可评估；达到该天数仍未盈利则强制卖出（默认 3 表示 T+1、T+2、T+3 三个收盘评估，T+3 未盈利也卖）。</summary>
+    public int MaxHoldingSessionsAfterEntry { get; set; } = 3;
+    /// <summary>是否启用市场环境过滤（按当日上涨家数占比）。</summary>
+    public bool EnableMarketFilter { get; set; } = true;
+    /// <summary>市场过滤阈值：当日上涨家数占比需 >= 该值（0~1）。</summary>
+    public decimal MinMarketUpRatio { get; set; } = 0.45m;
+    /// <summary>每日最多买入候选数量（按 FinalScore 排序）。</summary>
+    public int MaxPicksPerDay { get; set; } = 3;
+    /// <summary>最小止盈阈值（%）：达到该收益率才止盈卖出。</summary>
+    public decimal TakeProfitMinPercent { get; set; } = 1.5m;
+}
+
+/// <summary>
 /// 回测进度
 /// </summary>
 public class BacktestProgress

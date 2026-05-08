@@ -13,17 +13,21 @@ namespace StockAnalysisSystem.UI.Forms;
 {
     private readonly DailyPicker _picker;
     private readonly IDailyPickRepository _pickRepo;
+    private readonly IStockDailyDataRepository _dailyDataRepo;
     private readonly IServiceProvider _serviceProvider;
     private readonly StockFavoriteService _favoriteService;
     private readonly TencentRealtimeService _realtimeService;
     private bool _isHistoryMode = false;  // 是否为历史模式（只查询不选股）
     private Dictionary<string, (decimal Price, decimal ChangePercent)> _todayPriceDict = new(); // 今日行情数据缓存
     private Dictionary<string, int> _strategyIdMap = new();  // 策略名称到ID的映射
+    /// <summary>与当前列布局一致：true=展示选股日后三个交易日涨幅；false=展示今日行情两列</summary>
+    private bool? _gridFollowingDaysLayout;
 
-    public DailyPickForm(DailyPicker picker, IDailyPickRepository pickRepo, IServiceProvider serviceProvider, StockFavoriteService favoriteService)
+    public DailyPickForm(DailyPicker picker, IDailyPickRepository pickRepo, IStockDailyDataRepository dailyDataRepo, IServiceProvider serviceProvider, StockFavoriteService favoriteService)
     {
         _picker = picker;
         _pickRepo = pickRepo;
+        _dailyDataRepo = dailyDataRepo;
         _serviceProvider = serviceProvider;
         _favoriteService = favoriteService;
         _realtimeService = serviceProvider.GetRequiredService<TencentRealtimeService>();
@@ -82,8 +86,10 @@ namespace StockAnalysisSystem.UI.Forms;
             var results = await _picker.GetHistoryAsync(_dtpDate.Value);
             DisplayResults(results);
 
-            // 获取今日行情数据
-            await LoadTodayRealtimeDataAsync(results);
+            if (_dtpDate.Value.Date != DateTime.Today)
+                await LoadFollowingThreeDaysReturnsAsync(_dtpDate.Value.Date, results);
+            else
+                await LoadTodayRealtimeDataAsync(results);
         }
         catch (Exception ex)
         {
@@ -132,14 +138,26 @@ namespace StockAnalysisSystem.UI.Forms;
             foreach (DataGridViewRow row in _dataGridView.Rows)
             {
                 var stockCode = row.Cells["StockCode"].Value?.ToString();
+                if (string.IsNullOrEmpty(stockCode))
+                {
+                    row.Cells["TodayPrice"].Value = "-";
+                    row.Cells["TodayChangePercent"].Value = "-";
+                    continue;
+                }
+
                 if (_todayPriceDict.TryGetValue(stockCode, out var priceInfo))
                 {
                     row.Cells["TodayPrice"].Value = priceInfo.Price.ToString("F2");
                     row.Cells["TodayChangePercent"].Value = priceInfo.ChangePercent.ToString("F2");
-                    
+
                     // 根据涨跌幅设置颜色
-                    row.Cells["TodayChangePercent"].Style.ForeColor = 
+                    row.Cells["TodayChangePercent"].Style.ForeColor =
                         priceInfo.ChangePercent >= 0 ? System.Drawing.Color.FromArgb(220, 20, 60) : System.Drawing.Color.FromArgb(20, 160, 60);
+                }
+                else
+                {
+                    row.Cells["TodayPrice"].Value = "-";
+                    row.Cells["TodayChangePercent"].Value = "-";
                 }
             }
         }
@@ -147,6 +165,137 @@ namespace StockAnalysisSystem.UI.Forms;
         {
             ErrorLogger.Log(ex, "DailyPickForm.LoadTodayRealtimeDataAsync", "获取今日行情失败");
         }
+    }
+
+    /// <summary>
+    /// 选股日非当天时，用日线 <see cref="StockDailyData.ChangePercent"/> 填充选股日后第 1～3 个交易日的涨幅列。
+    /// </summary>
+    private async Task LoadFollowingThreeDaysReturnsAsync(DateTime pickTradeDate, List<DailyPickResult> results)
+    {
+        if (results == null || results.Count == 0) return;
+        if (!_dataGridView.Columns.Contains("FwdDay1Pct")) return;
+
+        try
+        {
+            var tradeDates = await _dailyDataRepo.GetTradeDatesAsync(pickTradeDate.Date.AddDays(1), pickTradeDate.Date.AddDays(45));
+            var next3 = tradeDates.Select(d => d.Date).Distinct().OrderBy(d => d).Take(3).ToList();
+
+            for (var i = 0; i < next3.Count; i++)
+            {
+                var colName = i == 0 ? "FwdDay1Pct" : i == 1 ? "FwdDay2Pct" : "FwdDay3Pct";
+                _dataGridView.Columns[colName].HeaderText = $"T+{i + 1}({next3[i]:MM-dd})";
+            }
+            for (var i = next3.Count; i < 3; i++)
+            {
+                var colName = i == 0 ? "FwdDay1Pct" : i == 1 ? "FwdDay2Pct" : "FwdDay3Pct";
+                _dataGridView.Columns[colName].HeaderText = $"T+{i + 1}";
+            }
+
+            var lookup = new Dictionary<(string StockId, DateTime TradeDate), decimal?>();
+            if (next3.Count > 0)
+            {
+                var from = next3[0];
+                var to = next3[^1];
+                var dateSet = next3.ToHashSet();
+                var stockIdSet = results.Select(r => r.StockId).ToHashSet();
+                var rows = await _dailyDataRepo.GetByDateRangeAsync(from, to);
+                foreach (var d in rows)
+                {
+                    if (!stockIdSet.Contains(d.StockID)) continue;
+                    var day = d.TradeDate.Date;
+                    if (!dateSet.Contains(day)) continue;
+                    lookup[(d.StockID, day)] = d.ChangePercent;
+                }
+            }
+
+            foreach (DataGridViewRow row in _dataGridView.Rows)
+            {
+                var stockId = row.Tag as string;
+                var colNames = new[] { "FwdDay1Pct", "FwdDay2Pct", "FwdDay3Pct" };
+                for (var i = 0; i < 3; i++)
+                {
+                    var cell = row.Cells[colNames[i]];
+                    if (string.IsNullOrEmpty(stockId) || i >= next3.Count)
+                    {
+                        cell.Value = "-";
+                        cell.Style.ForeColor = _dataGridView.DefaultCellStyle.ForeColor;
+                        continue;
+                    }
+
+                    var day = next3[i];
+                    if (lookup.TryGetValue((stockId, day), out var pct) && pct.HasValue)
+                    {
+                        cell.Value = pct.Value.ToString("F2");
+                        cell.Style.ForeColor =
+                            pct.Value >= 0 ? System.Drawing.Color.FromArgb(220, 20, 60) : System.Drawing.Color.FromArgb(20, 160, 60);
+                    }
+                    else
+                    {
+                        cell.Value = "-";
+                        cell.Style.ForeColor = _dataGridView.DefaultCellStyle.ForeColor;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorLogger.Log(ex, "DailyPickForm.LoadFollowingThreeDaysReturnsAsync", "加载后续三日涨幅失败");
+        }
+    }
+
+    private void EnsurePickResultGridColumns(bool showFollowingThreeDayReturns)
+    {
+        if (_gridFollowingDaysLayout == showFollowingThreeDayReturns && _dataGridView.Columns.Count > 0)
+            return;
+
+        _gridFollowingDaysLayout = showFollowingThreeDayReturns;
+        _dataGridView.Columns.Clear();
+
+        _dataGridView.Columns.Add("StockCode", "股票代码");
+        _dataGridView.Columns.Add("StockName", "股票名称");
+        _dataGridView.Columns.Add("Industry", "行业");
+        _dataGridView.Columns.Add("StrategyName", "策略");
+        _dataGridView.Columns.Add("Reason", "理由");
+        _dataGridView.Columns.Add("DeepSeekScore", "DeepSeek评分");
+        _dataGridView.Columns.Add("FinalScore", "最终得分");
+        _dataGridView.Columns.Add("Plates", "所属板块");
+
+        if (showFollowingThreeDayReturns)
+        {
+            _dataGridView.Columns.Add("FwdDay1Pct", "T+1涨幅");
+            _dataGridView.Columns.Add("FwdDay2Pct", "T+2涨幅");
+            _dataGridView.Columns.Add("FwdDay3Pct", "T+3涨幅");
+        }
+        else
+        {
+            _dataGridView.Columns.Add("TodayChangePercent", "今日涨幅");
+            _dataGridView.Columns.Add("TodayPrice", "今日价格");
+        }
+
+        _dataGridView.Columns.Add("DaysAfterLimitUp", "距首板天数");
+        _dataGridView.Columns.Add("DeviationFromLimitUpLow", "距首板最低价%");
+
+        _dataGridView.Columns["StockCode"].Width = 80;
+        _dataGridView.Columns["StockName"].Width = 100;
+        _dataGridView.Columns["Industry"].Width = 100;
+        _dataGridView.Columns["StrategyName"].Width = 120;
+        _dataGridView.Columns["Reason"].Width = 200;
+        _dataGridView.Columns["DeepSeekScore"].Width = 80;
+        _dataGridView.Columns["FinalScore"].Width = 80;
+        _dataGridView.Columns["Plates"].Width = 150;
+        if (showFollowingThreeDayReturns)
+        {
+            _dataGridView.Columns["FwdDay1Pct"].Width = 88;
+            _dataGridView.Columns["FwdDay2Pct"].Width = 88;
+            _dataGridView.Columns["FwdDay3Pct"].Width = 88;
+        }
+        else
+        {
+            _dataGridView.Columns["TodayChangePercent"].Width = 80;
+            _dataGridView.Columns["TodayPrice"].Width = 80;
+        }
+        _dataGridView.Columns["DaysAfterLimitUp"].Width = 80;
+        _dataGridView.Columns["DeviationFromLimitUpLow"].Width = 100;
     }
 
     private async void BtnRefresh_Click(object? sender, EventArgs e)
@@ -172,6 +321,10 @@ namespace StockAnalysisSystem.UI.Forms;
 
             var results = await _picker.PickAsync(_dtpDate.Value, null, _chkDeepSeek.Checked, progress);
             DisplayResults(results);
+            if (_dtpDate.Value.Date != DateTime.Today)
+                await LoadFollowingThreeDaysReturnsAsync(_dtpDate.Value.Date, results);
+            else
+                await LoadTodayRealtimeDataAsync(results);
         }
         catch (Exception ex)
         {
@@ -191,43 +344,13 @@ namespace StockAnalysisSystem.UI.Forms;
 
     private void DisplayResults(List<DailyPickResult> results)
     {
-        // 初始化 DataGridView 列（如果还没有列）
-        if (_dataGridView.Columns.Count == 0)
-        {
-            _dataGridView.Columns.Add("StockCode", "股票代码");
-            _dataGridView.Columns.Add("StockName", "股票名称");
-            _dataGridView.Columns.Add("Industry", "行业");
-            _dataGridView.Columns.Add("StrategyName", "策略");
-            _dataGridView.Columns.Add("Reason", "理由");
-            _dataGridView.Columns.Add("DeepSeekScore", "DeepSeek评分");
-            _dataGridView.Columns.Add("FinalScore", "最终得分");
-            _dataGridView.Columns.Add("LimitUpCount", "涨停次数");
-            _dataGridView.Columns.Add("Plates", "所属板块");
-            _dataGridView.Columns.Add("TodayChangePercent", "今日涨幅");
-            _dataGridView.Columns.Add("TodayPrice", "今日价格");
-            _dataGridView.Columns.Add("DaysAfterLimitUp", "距首板天数");
-            _dataGridView.Columns.Add("DeviationFromLimitUpLow", "距首板最低价%");
-
-            // 设置列宽
-            _dataGridView.Columns["StockCode"].Width = 80;
-            _dataGridView.Columns["StockName"].Width = 100;
-            _dataGridView.Columns["Industry"].Width = 100;
-            _dataGridView.Columns["StrategyName"].Width = 120;
-            _dataGridView.Columns["Reason"].Width = 200;
-            _dataGridView.Columns["DeepSeekScore"].Width = 80;
-            _dataGridView.Columns["FinalScore"].Width = 80;
-            _dataGridView.Columns["LimitUpCount"].Width = 80;
-            _dataGridView.Columns["Plates"].Width = 150;
-            _dataGridView.Columns["TodayChangePercent"].Width = 80;
-            _dataGridView.Columns["TodayPrice"].Width = 80;
-            _dataGridView.Columns["DaysAfterLimitUp"].Width = 80;
-            _dataGridView.Columns["DeviationFromLimitUpLow"].Width = 100;
-        }
+        var showFollowing = _dtpDate.Value.Date != DateTime.Today;
+        EnsurePickResultGridColumns(showFollowing);
 
         _dataGridView.Rows.Clear();
 
-        // 获取历史涨停数据
-        var limitUpData = new Dictionary<string, (int Count, string Plates)>();
+        // 从涨停表聚合所属板块（不按次数展示）
+        var platesByStock = new Dictionary<string, string>();
         try
         {
             using var scope = _serviceProvider.CreateScope();
@@ -236,7 +359,6 @@ namespace StockAnalysisSystem.UI.Forms;
             var stockCodes = results.Select(r => r.StockCode).Distinct().ToList();
             if (stockCodes.Any())
             {
-                // 涨停表股票代码需要加前缀才能匹配 (sz/sh)
                 var stockCodesWithPrefix = stockCodes
                     .Select(code => code.StartsWith("6") ? "sh" + code : "sz" + code)
                     .ToList();
@@ -245,35 +367,48 @@ namespace StockAnalysisSystem.UI.Forms;
                     .Where(s => stockCodesWithPrefix.Contains(s.code))
                     .ToList();
 
-                // 存储时去掉前缀，保持与选股结果一致
-                limitUpData = limitUpRecords
+                platesByStock = limitUpRecords
                     .GroupBy(s => s.code.Length > 2 ? s.code.Substring(2) : s.code)
                     .ToDictionary(
                         g => g.Key,
-                        g => (Count: g.Count(), Plates: string.Join(", ", g.Where(p => !string.IsNullOrEmpty(p.plate_name)).Select(p => p.plate_name!).Distinct()))
-                    );
+                        g => string.Join(", ", g.Where(p => !string.IsNullOrEmpty(p.plate_name)).Select(p => p.plate_name!).Distinct()));
             }
         }
         catch (Exception ex)
         {
-            ErrorLogger.Log(ex, "DailyPickForm.DisplayResults", "获取涨停数据失败");
+            ErrorLogger.Log(ex, "DailyPickForm.DisplayResults", "获取涨停板块失败");
         }
 
         foreach (var r in results)
         {
-            var limitUpInfo = limitUpData.TryGetValue(r.StockCode, out var info) ? info : (Count: 0, Plates: "");
-            _dataGridView.Rows.Add(
-                r.StockCode, r.StockName, r.Industry,
-                r.StrategyName, r.Reason,
-                r.DeepSeekScore?.ToString("F1") ?? "-",
-                r.FinalScore.ToString("F1"),
-                limitUpInfo.Count > 0 ? limitUpInfo.Count.ToString() : "-",
-                !string.IsNullOrEmpty(limitUpInfo.Plates) ? limitUpInfo.Plates : "-",
-                "加载中...",  // 今日涨幅
-                "加载中...",  // 今日价格
-                r.DaysAfterLimitUp?.ToString() ?? "-",  // 距首板天数
-                r.DeviationFromLimitUpLow?.ToString("P2") ?? "-"  // 距首板最低价百分比
-            );
+            var plates = platesByStock.TryGetValue(r.StockCode, out var p) && !string.IsNullOrEmpty(p) ? p : "-";
+            if (showFollowing)
+            {
+                var idx = _dataGridView.Rows.Add(
+                    r.StockCode, r.StockName, r.Industry,
+                    r.StrategyName, r.Reason,
+                    r.DeepSeekScore?.ToString("F1") ?? "-",
+                    r.FinalScore.ToString("F1"),
+                    plates,
+                    "加载中...", "加载中...", "加载中...",
+                    r.DaysAfterLimitUp?.ToString() ?? "-",
+                    r.DeviationFromLimitUpLow?.ToString("P2") ?? "-");
+                _dataGridView.Rows[idx].Tag = r.StockId;
+            }
+            else
+            {
+                var idx = _dataGridView.Rows.Add(
+                    r.StockCode, r.StockName, r.Industry,
+                    r.StrategyName, r.Reason,
+                    r.DeepSeekScore?.ToString("F1") ?? "-",
+                    r.FinalScore.ToString("F1"),
+                    plates,
+                    "加载中...",
+                    "加载中...",
+                    r.DaysAfterLimitUp?.ToString() ?? "-",
+                    r.DeviationFromLimitUpLow?.ToString("P2") ?? "-");
+                _dataGridView.Rows[idx].Tag = r.StockId;
+            }
         }
 
         _lblStats.Text = $"共选出 {results.Count} 只股票, 平均得分: {(results.Count > 0 ? results.Average(r => r.FinalScore).ToString("F1") : "-")}";
@@ -538,39 +673,8 @@ namespace StockAnalysisSystem.UI.Forms;
                 this.Invoke(() => { _lblStats.Text = $"策略 '{strategyName}' 选出 {results.Count} 只股票"; });
             }
 
-            // 找出同时满足所有策略的股票（取交集）
-            var combinedResults = new List<DailyPickResult>();
-            var allStockCodes = strategyResults.Values.SelectMany(r => r.Select(p => p.StockCode)).Distinct().ToList();
-
-            foreach (var stockCode in allStockCodes)
-            {
-                // 检查该股票是否在所有策略的结果中都存在
-                bool inAllStrategies = true;
-                var matchedResults = new List<DailyPickResult>();
-
-                foreach (var strategyId in selectedStrategyIds)
-                {
-                    var result = strategyResults[strategyId].FirstOrDefault(r => r.StockCode == stockCode);
-                    if (result == null)
-                    {
-                        inAllStrategies = false;
-                        break;
-                    }
-                    matchedResults.Add(result);
-                }
-
-                // 如果在所有策略中都有该股票，则添加到组合结果
-                if (inAllStrategies && matchedResults.Count > 0)
-                {
-                    // 合并所有策略的理由
-                    var combinedResult = matchedResults[0];
-                    var allReasons = matchedResults.Select(r => r.Reason).ToList();
-                    combinedResult.Reason = string.Join(" | ", allReasons);
-                    combinedResult.StrategyName = string.Join(", ", matchedResults.Select(r => r.StrategyName).Distinct());
-
-                    combinedResults.Add(combinedResult);
-                }
-            }
+            // 找出同时满足所有策略的股票（取交集），与回测引擎共用逻辑
+            var combinedResults = DailyPicker.CombinePickResultsIntersection(selectedStrategyIds, strategyResults);
 
             // 如果启用DeepSeek评分，需要调用完整的选股（传入所有策略，但用DeepSeek评分）
             if (_chkDeepSeek.Checked && combinedResults.Count > 0)
@@ -583,6 +687,10 @@ namespace StockAnalysisSystem.UI.Forms;
             }
 
             DisplayResults(combinedResults);
+            if (_dtpDate.Value.Date != DateTime.Today)
+                await LoadFollowingThreeDaysReturnsAsync(_dtpDate.Value.Date, combinedResults);
+            else
+                await LoadTodayRealtimeDataAsync(combinedResults);
 
             MessageBox.Show($"组合选股完成！\n\n" +
                           $"选中策略数: {selectedStrategyIds.Count}\n" +

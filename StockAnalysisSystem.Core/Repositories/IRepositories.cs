@@ -30,6 +30,11 @@ public interface IStockDailyDataRepository
     /// 批量获取指定日期范围内所有股票的日线数据（用于批量处理优化）
     /// </summary>
     Task<List<StockDailyData>> GetByDateRangeAsync(DateTime startDate, DateTime endDate);
+
+    /// <summary>
+    /// 批量获取指定日期范围内指定股票的日线数据（用于快速试跑/范围回测）。
+    /// </summary>
+    Task<List<StockDailyData>> GetByStockIdsAndDateRangeAsync(IReadOnlyList<string> stockIds, DateTime startDate, DateTime endDate);
 }
 
 /// <summary>
@@ -46,6 +51,11 @@ public interface IIndicatorRepository
     /// 批量获取指定日期范围内所有股票的技术指标（用于批量处理优化）
     /// </summary>
     Task<List<StockDailyIndicator>> GetByDateRangeAsync(DateTime startDate, DateTime endDate);
+
+    /// <summary>
+    /// 批量获取指定日期范围内指定股票的技术指标（用于快速试跑/范围回测）。
+    /// </summary>
+    Task<List<StockDailyIndicator>> GetByStockIdsAndDateRangeAsync(IReadOnlyList<string> stockIds, DateTime startDate, DateTime endDate);
 }
 
 /// <summary>

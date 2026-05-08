@@ -161,14 +161,15 @@ public class DailyPicker
 
             // 优化：批量查询日线数据（2次查询替代2N次查询）
             // 注意：根据策略类型决定加载天数
-            // - 单独使用首板后回落策略：只需要30天
+            // - 单独使用首板后回落策略：需覆盖 FirstBoardLookbackDays（默认30）+ MaxDaysAfterLimitUp（默认10）及余量
             // - 使用其他策略或组合策略：计算120日均线需要至少120天数据，为了安全起见，获取200天数据
             var isOnlyFirstBoardPullback = strategies.Count == 1 && strategies.First().StrategyType == "FirstBoardPullback";
+            const int firstBoardPullbackLoadDays = 55;
             var startDate = isOnlyFirstBoardPullback
-                ? actualTradeDate.AddDays(-30)
+                ? actualTradeDate.AddDays(-firstBoardPullbackLoadDays)
                 : actualTradeDate.AddDays(-200);
 
-            var loadingDays = isOnlyFirstBoardPullback ? 30 : 200;
+            var loadingDays = isOnlyFirstBoardPullback ? firstBoardPullbackLoadDays : 200;
             progress?.Report($"加载最近 {loadingDays} 天的数据...");
 
             // 批量获取所有股票的日线数据
@@ -559,5 +560,56 @@ public class DailyPicker
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// 与「每日选股」组合选股（且关系）一致：仅保留各策略结果中均出现的股票代码，
+    /// 合并 <see cref="DailyPickResult.Reason"/> 与 <see cref="DailyPickResult.StrategyName"/>。
+    /// </summary>
+    /// <param name="orderedStrategyIds">勾选顺序，须与 <paramref name="strategyResultsPerId"/> 的键一致。</param>
+    public static List<DailyPickResult> CombinePickResultsIntersection(
+        IReadOnlyList<int> orderedStrategyIds,
+        IReadOnlyDictionary<int, List<DailyPickResult>> strategyResultsPerId)
+    {
+        var combinedResults = new List<DailyPickResult>();
+        if (orderedStrategyIds.Count == 0)
+            return combinedResults;
+
+        var allStockCodes = strategyResultsPerId.Values
+            .SelectMany(r => r.Select(p => p.StockCode))
+            .Distinct()
+            .ToList();
+
+        foreach (var stockCode in allStockCodes)
+        {
+            var matchedResults = new List<DailyPickResult>();
+            foreach (var strategyId in orderedStrategyIds)
+            {
+                if (!strategyResultsPerId.TryGetValue(strategyId, out var list))
+                {
+                    matchedResults.Clear();
+                    break;
+                }
+
+                var hit = list.FirstOrDefault(r => r.StockCode == stockCode);
+                if (hit == null)
+                {
+                    matchedResults.Clear();
+                    break;
+                }
+
+                matchedResults.Add(hit);
+            }
+
+            if (matchedResults.Count != orderedStrategyIds.Count || matchedResults.Count == 0)
+                continue;
+
+            var combinedResult = matchedResults[0];
+            combinedResult.Reason = string.Join(" | ", matchedResults.Select(r => r.Reason));
+            combinedResult.StrategyName = string.Join(", ", matchedResults.Select(r => r.StrategyName).Distinct());
+            combinedResults.Add(combinedResult);
+        }
+
+        return combinedResults;
     }
 }

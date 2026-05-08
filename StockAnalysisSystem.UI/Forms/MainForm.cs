@@ -64,6 +64,7 @@ public partial class MainForm : Form
         var pickMenu = new ToolStripMenuItem("选股(&P)");
         pickMenu.DropDownItems.Add("每日选股(&D)", null, ShowDailyPickForm);
         pickMenu.DropDownItems.Add("选股历史(&H)", null, ShowPickHistoryForm);
+        pickMenu.DropDownItems.Add("热点选股(&T)", null, ShowHotSpotPickForm);
         pickMenu.DropDownItems.Add(new ToolStripSeparator());
         pickMenu.DropDownItems.Add("DeepSeek板块分析(&D)", null, ShowDeepSeekMarketAnalysisForm);
         pickMenu.DropDownItems.Add("板块分析(&B)", null, ShowPlateAnalysisForm);
@@ -157,6 +158,12 @@ public partial class MainForm : Form
     {
         var form = _serviceProvider.GetRequiredService<DailyPickForm>();
         form.SetMode(true);   // 选股历史模式：只查询历史数据
+        ShowInMainPanel(form);
+    }
+
+    private void ShowHotSpotPickForm(object? sender, EventArgs e)
+    {
+        var form = _serviceProvider.GetRequiredService<HotSpotPickForm>();
         ShowInMainPanel(form);
     }
 

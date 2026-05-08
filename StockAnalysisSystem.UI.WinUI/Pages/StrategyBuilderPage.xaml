@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="StockAnalysisSystem_UI_WinUI.Pages.StrategyBuilderPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Grid Padding="16">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="360" />
+            <ColumnDefinition Width="16" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel Spacing="12">
+                <TextBlock FontSize="20" FontWeight="SemiBold" Text="策略构建（测试）" />
+
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Content="首板后回落（模板）" Click="BtnTemplateFirstBoardPullback_Click" />
+                    <Button Content="生成 JSON" Click="BtnRefreshJson_Click" />
+                    <Button Content="保存 JSON 到文件..." Click="BtnSaveJson_Click" />
+                </StackPanel>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Text="策略名称" />
+                    <TextBox x:Name="TxtName" Text="规则策略" />
+                </StackPanel>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Text="入场规则（AND）" />
+                    <ListView x:Name="EntryRulesList" Height="160" SelectionMode="Single" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="删除所选" Click="BtnRemoveEntry_Click" />
+                        <Button Content="清空" Click="BtnClearEntry_Click" />
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Text="添加条件" />
+                    <ComboBox x:Name="CboRuleType" SelectedIndex="0">
+                        <ComboBoxItem Content="比较（字段 vs 常数）" />
+                        <ComboBoxItem Content="上穿（Fast 上穿 Slow）" />
+                        <ComboBoxItem Content="下穿（Fast 下穿 Slow）" />
+                    </ComboBox>
+
+                    <StackPanel x:Name="PanelCompare" Spacing="8">
+                        <ComboBox x:Name="CboLeftSource" />
+                        <ComboBox x:Name="CboCompareOp" />
+                        <TextBox x:Name="TxtRightValue" Text="0" />
+                    </StackPanel>
+
+                    <StackPanel x:Name="PanelCross" Spacing="8" Visibility="Collapsed">
+                        <ComboBox x:Name="CboFastSource" />
+                        <ComboBox x:Name="CboSlowSource" />
+                    </StackPanel>
+
+                    <Button Content="添加到入场规则" Click="BtnAddEntry_Click" />
+                </StackPanel>
+
+                <TextBlock x:Name="TxtStatus" Opacity="0.8" TextWrapping="Wrap" />
+            </StackPanel>
+        </ScrollViewer>
+
+        <Grid Grid.Column="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <TextBlock FontSize="16" FontWeight="SemiBold" Text="JSON 预览" />
+            <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                <TextBlock x:Name="TxtJson" TextWrapping="Wrap" />
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</Page>
+

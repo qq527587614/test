@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="StockAnalysisSystem_UI_WinUI.Pages.BacktestReportPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Grid Padding="16">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Spacing="12">
+            <TextBlock FontSize="20" FontWeight="SemiBold" Text="Backtest Report" />
+            <TextBlock x:Name="TxtMetrics" TextWrapping="Wrap" />
+
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Content="Export Equity PNG" Click="ExportEquityPng_Click" />
+                <Button Content="Export CSV" Click="ExportCsv_Click" />
+                <Button Content="Export Trades CSV" Click="ExportTradesCsv_Click" />
+            </StackPanel>
+
+            <TextBlock Opacity="0.7" Text="Equity Curve" />
+            <Border BorderBrush="{ThemeResource SystemControlForegroundBaseLowBrush}" BorderThickness="1" CornerRadius="8" Padding="8">
+                <Canvas x:Name="EquityCanvas" Height="260" />
+            </Border>
+
+            <TextBlock Opacity="0.7" Text="Drawdown (Underwater)" />
+            <Border BorderBrush="{ThemeResource SystemControlForegroundBaseLowBrush}" BorderThickness="1" CornerRadius="8" Padding="8">
+                <Canvas x:Name="DrawdownCanvas" Height="220" />
+            </Border>
+
+            <TextBlock Opacity="0.7" Text="Trades (Buy/Sell Details)" />
+            <Border BorderBrush="{ThemeResource SystemControlForegroundBaseLowBrush}" BorderThickness="1" CornerRadius="8" Padding="8">
+                <ListView x:Name="TradesList" Height="260" SelectionMode="None" />
+            </Border>
+        </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</Page>
+

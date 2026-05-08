@@ -482,6 +482,396 @@ public class BacktestEngine
         }
     }
 
+    /// <summary>
+    /// 首板回落组合回测：资金分为 <see cref="FirstBoardPullbackPortfolioSettings.MaxSlots"/> 等份；
+    /// 每日按空闲仓位买入当日 <see cref="DailyPicker.PickAsync"/> 结果中得分靠前的股票（每只占一份、不重复建仓）；
+    /// 买入与卖出判定价均为当日收盘价（含滑点）；自建仓次一交易日起每个收盘：
+    /// 若相对买入价已盈利则卖出，否则继续持有，直至已满 <see cref="FirstBoardPullbackPortfolioSettings.MaxHoldingSessionsAfterEntry"/> 个交易日仍未盈利则强制卖出。
+    /// </summary>
+    public async Task<BacktestResult> RunFirstBoardPullbackPortfolioBacktestAsync(
+        FirstBoardPullbackPortfolioSettings settings,
+        IProgress<string>? progress = null)
+    {
+        var result = new BacktestResult
+        {
+            StartDate = settings.StartDate.Date,
+            EndDate = settings.EndDate.Date,
+            InitialCapital = settings.InitialCapital,
+            FinalEquity = settings.InitialCapital,
+            EquityCurve = new List<EquityPoint>()
+        };
+
+        var maxSlots = Math.Clamp(settings.MaxSlots, 1, 50);
+        var maxHoldSessions = Math.Max(1, settings.MaxHoldingSessionsAfterEntry);
+        var commission = settings.Commission;
+        var slippage = settings.Slippage;
+        var enableMarketFilter = settings.EnableMarketFilter;
+        var minMarketUpRatio = Math.Clamp(settings.MinMarketUpRatio, 0m, 1m);
+        var maxPicksPerDay = Math.Max(1, settings.MaxPicksPerDay);
+        var takeProfitMinRatio = Math.Max(0m, settings.TakeProfitMinPercent) / 100m;
+
+        var orderedDistinctIds = settings.CombineStrategyIds.Where(id => id > 0).Distinct().ToList();
+        if (orderedDistinctIds.Count == 0)
+        {
+            progress?.Report("请至少勾选一个策略（与每日选股-组合选股一致）。");
+            return result;
+        }
+
+        var strategyMetaList = await _strategyRepo.GetByIdsAsync(orderedDistinctIds);
+        if (strategyMetaList.Count != orderedDistinctIds.Count)
+        {
+            progress?.Report("部分策略 Id 无效或不存在，请检查策略管理。");
+            return result;
+        }
+
+        var metaById = strategyMetaList.ToDictionary(s => s.Id);
+        var combineStrategyLabel = string.Join("+", orderedDistinctIds.Select(id => metaById[id].Name)) + "(十仓组合)";
+
+        progress?.Report("加载日线数据...");
+        var allDailyData = await _dailyDataRepo.GetByDateRangeAsync(
+            settings.StartDate.Date.AddDays(-220),
+            settings.EndDate.Date.AddDays(30));
+
+        var dailyDataByStock = allDailyData.ToLookup(d => d.StockID);
+
+        var tradingDays = allDailyData
+            .Where(d => d.TradeDate >= settings.StartDate.Date && d.TradeDate <= settings.EndDate.Date)
+            .Select(d => d.TradeDate.Date)
+            .Distinct()
+            .OrderBy(d => d)
+            .ToList();
+
+        if (tradingDays.Count == 0)
+        {
+            progress?.Report("区间内无交易日数据。");
+            return result;
+        }
+
+        var dateToIndex = new Dictionary<DateTime, int>();
+        for (var i = 0; i < tradingDays.Count; i++)
+            dateToIndex[tradingDays[i]] = i;
+
+        var stocks = await _stockRepo.GetAllAsync();
+        var stockById = stocks.ToDictionary(s => s.Id, s => s);
+
+        var trades = new List<TradeRecord>();
+        decimal cash = settings.InitialCapital;
+
+        decimal? GetSettlementPrice(StockDailyData bar)
+        {
+            return (bar.CurrentPrice.HasValue && bar.CurrentPrice.Value > 0)
+                ? bar.CurrentPrice.Value
+                : null;
+        }
+
+        void CloseTrade(TradeRecord t, DateTime sellDate, decimal sellPrice, string reason)
+        {
+            if (t.SellDate.HasValue) return;
+            var buyAmt = t.BuyPrice * t.Shares;
+            var sellAmt = sellPrice * t.Shares;
+            var buyComm = buyAmt * commission;
+            var sellComm = sellAmt * commission;
+            cash += sellAmt - sellComm;
+            t.SellDate = sellDate;
+            t.SellPrice = sellPrice;
+            t.SellReason = reason;
+            t.Commission = buyComm + sellComm;
+            t.ProfitLoss = sellAmt - buyAmt - t.Commission;
+            t.ProfitLossPercent = buyAmt > 0 ? t.ProfitLoss / buyAmt * 100 : 0;
+            if (dateToIndex.TryGetValue(t.BuyDate.Date, out var bi) && dateToIndex.TryGetValue(sellDate.Date, out var si))
+                t.HoldingDays = si - bi;
+            else
+                t.HoldingDays = (sellDate.Date - t.BuyDate.Date).Days;
+        }
+
+        foreach (var tradeDate in tradingDays)
+        {
+            progress?.Report($"组合回测: {tradeDate:yyyy-MM-dd}");
+            var currentIdx = dateToIndex[tradeDate.Date];
+
+            // —— 1) 平仓：建仓日当日不评估；自次一交易日起按收盘规则处理
+            foreach (var t in trades.Where(x => !x.SellDate.HasValue).ToList())
+            {
+                if (t.BuyDate.Date >= tradeDate.Date)
+                    continue;
+
+                if (!dateToIndex.TryGetValue(t.BuyDate.Date, out var entryIdx))
+                    continue;
+
+                var sessionsAfterEntry = currentIdx - entryIdx;
+                if (sessionsAfterEntry <= 0)
+                    continue;
+
+                if (!dailyDataByStock.Contains(t.StockId))
+                    continue;
+
+                var bar = dailyDataByStock[t.StockId].FirstOrDefault(d => d.TradeDate.Date == tradeDate.Date);
+                if (bar == null)
+                    continue;
+
+                var settlePrice = GetSettlementPrice(bar);
+                if (!settlePrice.HasValue)
+                    continue;
+                var rawClose = settlePrice.Value;
+                var sellPx = rawClose * (1 - slippage);
+                var buyPx = t.BuyPrice;
+
+                var takeProfit = rawClose >= buyPx * (1m + takeProfitMinRatio);
+                var forceTime = sessionsAfterEntry >= maxHoldSessions;
+                // 当日为上涨（涨跌幅>0）则卖出，与止盈/强平并列
+                var isUpDay = bar.ChangePercent.HasValue && bar.ChangePercent.Value > 0;
+
+                if (takeProfit || forceTime || isUpDay)
+                {
+                    var reason = takeProfit
+                        ? "盈利止盈(CurrentPrice)"
+                        : forceTime
+                            ? $"满{maxHoldSessions}个交易日未盈利强平(CurrentPrice)"
+                            : "当日上涨平仓(涨跌幅>0)";
+                    CloseTrade(t, tradeDate.Date, sellPx, reason);
+                }
+            }
+
+            // —— 2) 开仓：空闲仓位 = 总份数 - 当前未平笔数
+            var openCount = trades.Count(x => !x.SellDate.HasValue);
+            var freeSlots = maxSlots - openCount;
+            if (freeSlots > 0 && cash > 0)
+            {
+                if (enableMarketFilter)
+                {
+                    var marketBars = allDailyData
+                        .Where(d => d.TradeDate.Date == tradeDate.Date && d.ChangePercent.HasValue)
+                        .ToList();
+                    if (marketBars.Count > 0)
+                    {
+                        var upRatio = (decimal)marketBars.Count(d => d.ChangePercent!.Value >= 0m) / marketBars.Count;
+                        if (upRatio < minMarketUpRatio)
+                        {
+                            progress?.Report($"市场过滤触发：{tradeDate:yyyy-MM-dd} 上涨占比 {upRatio:P1} < 阈值 {minMarketUpRatio:P1}，当日不新开仓。");
+                            continue;
+                        }
+                    }
+                }
+
+                List<DailyPickResult> picks;
+                try
+                {
+                    // 与 DailyPickForm 组合选股一致：各策略单独 PickAsync，再取交集
+                    var strategyResults = new Dictionary<int, List<DailyPickResult>>();
+                    foreach (var sid in orderedDistinctIds)
+                    {
+                        var one = await _dailyPicker.PickAsync(
+                            tradeDate,
+                            new List<int> { sid },
+                            useDeepSeek: false,
+                            progress);
+                        strategyResults[sid] = one;
+                    }
+
+                    picks = DailyPicker.CombinePickResultsIntersection(orderedDistinctIds, strategyResults);
+                }
+                catch (Exception ex)
+                {
+                    ErrorLogger.Log(ex, "RunFirstBoardPullbackPortfolioBacktestAsync.PickAsync", tradeDate.ToString("yyyy-MM-dd"));
+                    picks = new List<DailyPickResult>();
+                }
+
+                var heldIds = new HashSet<string>(trades.Where(x => !x.SellDate.HasValue).Select(x => x.StockId));
+                var buyCandidates = picks
+                    .OrderByDescending(p => p.FinalScore)
+                    .Take(maxPicksPerDay)
+                    .ToList();
+
+                decimal PositionMarkValue()
+                {
+                    decimal mv = 0;
+                    foreach (var ot in trades.Where(x => !x.SellDate.HasValue))
+                    {
+                        var b = dailyDataByStock[ot.StockId].FirstOrDefault(d => d.TradeDate.Date == tradeDate.Date);
+                        var settle = b == null ? null : GetSettlementPrice(b);
+                        if (settle.HasValue)
+                            mv += settle.Value * ot.Shares;
+                    }
+                    return mv;
+                }
+
+                var equityForSizing = cash + PositionMarkValue();
+                var slotBudget = equityForSizing / maxSlots;
+
+                foreach (var pick in buyCandidates)
+                {
+                    if (freeSlots <= 0)
+                        break;
+                    if (heldIds.Contains(pick.StockId))
+                        continue;
+
+                    if (!dailyDataByStock.Contains(pick.StockId))
+                        continue;
+
+                    var buyBar = dailyDataByStock[pick.StockId].FirstOrDefault(d => d.TradeDate.Date == tradeDate.Date);
+                    if (buyBar == null)
+                        continue;
+
+                    var buySettle = GetSettlementPrice(buyBar);
+                    if (!buySettle.HasValue)
+                        continue;
+                    var buyPrice = buySettle.Value * (1 + slippage);
+                    if (buyPrice <= 0)
+                        continue;
+
+                    var budget = Math.Min(slotBudget, cash / Math.Max(1, freeSlots));
+                    var rawShares = (int)(budget / buyPrice / 100) * 100;
+                    if (rawShares <= 0)
+                        continue;
+
+                    var buyAmt = buyPrice * rawShares;
+                    var buyComm = buyAmt * commission;
+                    if (buyAmt + buyComm > cash)
+                        continue;
+
+                    cash -= buyAmt + buyComm;
+
+                    if (!stockById.TryGetValue(pick.StockId, out var si))
+                        continue;
+
+                    var tr = new TradeRecord
+                    {
+                        StockId = pick.StockId,
+                        StockCode = pick.StockCode,
+                        StockName = pick.StockName,
+                        StrategyName = combineStrategyLabel,
+                        BuyDate = tradeDate.Date,
+                        BuyPrice = buyPrice,
+                        Shares = rawShares,
+                        Commission = buyComm
+                    };
+                    trades.Add(tr);
+                    heldIds.Add(pick.StockId);
+                    freeSlots--;
+                }
+            }
+
+            // —— 3) 当日权益
+            decimal mvEnd = 0;
+            foreach (var ot in trades.Where(x => !x.SellDate.HasValue))
+            {
+                var b = dailyDataByStock[ot.StockId].FirstOrDefault(d => d.TradeDate.Date == tradeDate.Date);
+                var settle = b == null ? null : GetSettlementPrice(b);
+                if (settle.HasValue)
+                    mvEnd += settle.Value * ot.Shares;
+            }
+
+            result.EquityCurve.Add(new EquityPoint
+            {
+                Date = tradeDate.Date,
+                Cash = cash,
+                PositionValue = mvEnd,
+                Equity = cash + mvEnd
+            });
+        }
+
+        // 区间结束：强平未了结
+        var lastDay = tradingDays[^1];
+        foreach (var t in trades.Where(x => !x.SellDate.HasValue).ToList())
+        {
+            if (!dailyDataByStock.Contains(t.StockId))
+                continue;
+            var bar = dailyDataByStock[t.StockId].Where(d => d.TradeDate <= lastDay).OrderByDescending(d => d.TradeDate).FirstOrDefault();
+            if (bar == null)
+                continue;
+            var settlePrice = GetSettlementPrice(bar);
+            if (!settlePrice.HasValue)
+                continue;
+            var sellPx = settlePrice.Value * (1 - slippage);
+            CloseTrade(t, bar.TradeDate.Date, sellPx, "回测区间结束清算");
+        }
+
+        result.Trades = trades.Where(t => t.SellDate.HasValue).ToList();
+        result.TradingDays = tradingDays.Count;
+        result.FinalEquity = cash;
+
+        CalculateFirstBoardPortfolioPerformance(result);
+        progress?.Report($"首板回落组合回测完成，共 {result.Trades.Count} 笔完整交易。");
+        return result;
+    }
+
+    private static void CalculateFirstBoardPortfolioPerformance(BacktestResult result)
+    {
+        if (result.Trades.Count == 0)
+        {
+            result.TotalReturn = result.InitialCapital > 0
+                ? (result.FinalEquity - result.InitialCapital) / result.InitialCapital * 100
+                : 0;
+            result.WinRate = 0;
+            result.TradeCount = 0;
+            result.WinCount = 0;
+            result.LossCount = 0;
+            return;
+        }
+
+        result.TradeCount = result.Trades.Count;
+        result.WinCount = result.Trades.Count(t => t.ProfitLoss > 0);
+        result.LossCount = result.Trades.Count(t => t.ProfitLoss < 0);
+        result.WinRate = (decimal)result.WinCount / result.TradeCount * 100;
+
+        var profits = result.Trades.Where(t => t.ProfitLoss > 0).Select(t => t.ProfitLoss).ToList();
+        var losses = result.Trades.Where(t => t.ProfitLoss < 0).Select(t => Math.Abs(t.ProfitLoss)).ToList();
+        result.AverageProfit = profits.Count > 0 ? profits.Average() : 0;
+        result.AverageLoss = losses.Count > 0 ? losses.Average() : 0;
+        result.MaxProfit = profits.Count > 0 ? profits.Max() : 0;
+        result.MaxLoss = losses.Count > 0 ? losses.Max() : 0;
+        if (result.AverageLoss > 0)
+            result.ProfitFactor = result.AverageProfit / result.AverageLoss;
+
+        if (result.InitialCapital > 0)
+            result.TotalReturn = (result.FinalEquity - result.InitialCapital) / result.InitialCapital * 100;
+
+        if (result.EquityCurve.Count > 1)
+        {
+            decimal peak = result.InitialCapital;
+            decimal maxDrawdown = 0;
+            foreach (var pt in result.EquityCurve)
+            {
+                if (pt.Equity > peak)
+                    peak = pt.Equity;
+                if (peak > 0)
+                {
+                    var dd = (peak - pt.Equity) / peak;
+                    if (dd > maxDrawdown)
+                        maxDrawdown = dd;
+                }
+            }
+            result.MaxDrawdown = maxDrawdown * 100;
+
+            var returns = new List<decimal>();
+            for (var i = 1; i < result.EquityCurve.Count; i++)
+            {
+                if (result.EquityCurve[i - 1].Equity > 0)
+                {
+                    var r = (result.EquityCurve[i].Equity - result.EquityCurve[i - 1].Equity) / result.EquityCurve[i - 1].Equity;
+                    returns.Add(r);
+                }
+            }
+            if (returns.Count > 0)
+            {
+                var avg = returns.Average();
+                var std = (decimal)Math.Sqrt(returns.Select(x => (double)((x - avg) * (x - avg))).Average());
+                if (std > 0)
+                    result.SharpeRatio = avg / std * (decimal)Math.Sqrt(252);
+            }
+        }
+
+        var days = (result.EndDate - result.StartDate).Days;
+        if (days > 0 && result.InitialCapital > 0)
+        {
+            var years = days / 365m;
+            if (years > 0 && result.FinalEquity > 0)
+            {
+                result.AnnualReturn = (decimal)(Math.Pow((double)(result.FinalEquity / result.InitialCapital), 1.0 / (double)years) - 1) * 100;
+            }
+        }
+    }
+
     private async Task<BacktestResult> RunStrategyBacktestAsync(
         DateTime startDate,
         DateTime endDate,

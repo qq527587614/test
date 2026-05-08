@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "StockAnalysisSystem.UI.WinUI (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "StockAnalysisSystem.UI.WinUI (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

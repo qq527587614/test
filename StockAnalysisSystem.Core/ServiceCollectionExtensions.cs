@@ -2,9 +2,12 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using StockAnalysisSystem.Core.Common;
+using StockAnalysisSystem.Core.Indicators;
 using StockAnalysisSystem.Core.Repositories;
 using StockAnalysisSystem.Core.RealtimeData;
 using StockAnalysisSystem.Core.Services;
+using StockAnalysisSystem.Core.Strategies.Rules;
+using StockAnalysisSystem.Core.Backtest.V2;
 
 namespace StockAnalysisSystem.Core;
 
@@ -55,14 +58,24 @@ public static class ServiceCollectionExtensions
 
         // 注册服务
         services.AddScoped<Indicators.IndicatorCalculator>();
+        services.AddScoped<IIndicatorProvider, IndicatorProvider>();
         services.AddScoped<Strategies.StrategyFactory>();
+        services.AddScoped<RuleStrategyRuntime>();
         services.AddScoped<Backtest.BacktestEngine>();
+        services.AddScoped<BacktestEngineV2>();
+        services.AddScoped<AnalyticsServiceV2>();
+        services.AddScoped<DailyPickBacktesterV2>();
+        services.AddScoped<FirstBoardPullbackPortfolioBacktesterV2>();
+        services.AddScoped<StrategyBacktesterV2>();
         services.AddScoped<Optimization.ParameterOptimizer>();
         services.AddScoped<DailyPick.DailyPicker>();
         services.AddScoped<DeepSeek.DeepSeekClient>();
         services.AddScoped<TencentRealtimeService>();
         services.AddScoped<StockFavoriteService>();
         services.AddScoped<PlateService>();
+        services.AddScoped<LimitUpSyncService>();
+        services.AddScoped<TencentDailyKLineSyncService>();
+        services.AddScoped<HotSpotLimitUpMa5Picker>();
         services.AddScoped<IKLineDataService, KLineDataService>();
         services.AddDbContextFactory<AppDbContext>();
 

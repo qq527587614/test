@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="StockAnalysisSystem_UI_WinUI.Pages.BacktestRunnerPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Grid Padding="16">
+        <StackPanel Spacing="12">
+            <TextBlock FontSize="20" FontWeight="SemiBold" Text="回测运行（V2）" />
+            <TextBlock Opacity="0.7" Text="这里会把 DailyPick/十仓/单策略回测都接入 V2，并把结果送到 Report 页。" />
+
+            <StackPanel Spacing="8">
+                <TextBlock FontWeight="SemiBold" Text="首板回落短线（十仓组合，快进快出）" />
+                <TextBlock Opacity="0.7" Text="这条链路使用你项目原有的首板回测逻辑：DailyPicker 组合交集选股 + 止盈/当日上涨/满N交易日强平（默认≤3天）。" />
+
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <StackPanel Width="240" Spacing="4">
+                        <TextBlock Text="组合策略ID（逗号分隔）" />
+                        <TextBox x:Name="TxtFirstBoardCombineIds" Text="1,2" />
+                    </StackPanel>
+                    <StackPanel Width="140" Spacing="4">
+                        <TextBlock Text="最大持仓交易日(≤3)" />
+                        <TextBox x:Name="TxtFirstBoardMaxHold" Text="3" />
+                    </StackPanel>
+                    <StackPanel Width="140" Spacing="4">
+                        <TextBlock Text="止盈阈值(%)" />
+                        <TextBox x:Name="TxtFirstBoardTakeProfit" Text="1.5" />
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <StackPanel Width="140" Spacing="4">
+                        <TextBlock Text="最大仓位数(十仓)" />
+                        <TextBox x:Name="TxtFirstBoardMaxSlots" Text="10" />
+                    </StackPanel>
+                    <StackPanel Width="140" Spacing="4">
+                        <TextBlock Text="每日最多买入" />
+                        <TextBox x:Name="TxtFirstBoardMaxPicks" Text="3" />
+                    </StackPanel>
+                    <StackPanel Width="140" Spacing="4">
+                        <TextBlock Text="市场过滤阈值" />
+                        <TextBox x:Name="TxtFirstBoardMinUpRatio" Text="0.45" />
+                    </StackPanel>
+                    <StackPanel Width="160" Spacing="4">
+                        <TextBlock Text="启用市场过滤(0/1)" />
+                        <TextBox x:Name="TxtFirstBoardEnableMarketFilter" Text="1" />
+                    </StackPanel>
+                </StackPanel>
+
+                <Button Content="运行：首板回落短线（十仓组合）" Click="RunFirstBoardPortfolio_Click" Width="280" />
+            </StackPanel>
+
+            <StackPanel Spacing="8">
+                <TextBlock FontWeight="SemiBold" Text="规则策略（StrategyDefinition JSON）" />
+                <StackPanel Spacing="8">
+                    <TextBlock Opacity="0.7" Text="回测参数（留空则用默认值）" />
+
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <StackPanel Width="140" Spacing="4">
+                            <TextBlock Text="回测天数" />
+                            <TextBox x:Name="TxtDays" Text="365" />
+                        </StackPanel>
+                        <StackPanel Width="180" Spacing="4">
+                            <TextBlock Text="最大股票数（试跑）" />
+                            <TextBox x:Name="TxtMaxStocks" Text="500" />
+                        </StackPanel>
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <StackPanel Width="180" Spacing="4">
+                            <TextBlock Text="初始资金" />
+                            <TextBox x:Name="TxtInitialCapital" Text="1000000" />
+                        </StackPanel>
+                        <StackPanel Width="140" Spacing="4">
+                            <TextBlock Text="最大持仓数" />
+                            <TextBox x:Name="TxtMaxPositions" Text="10" />
+                        </StackPanel>
+                        <StackPanel Width="140" Spacing="4">
+                            <TextBlock Text="止损（%）" />
+                            <TextBox x:Name="TxtStopLossPct" Text="-5" />
+                        </StackPanel>
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Content="选择策略 JSON 并运行（全市场）" Click="RunRuleJson_Click" Width="280" />
+                    <Button Content="使用规则树首板后回落模板并运行" Click="RunFirstBoardTemplate_Click" Width="240" />
+                </StackPanel>
+                <TextBlock Opacity="0.7" Text="说明：先走最小可用链路（全市场回测可能需要一点时间）。跑完后去「回测报告」查看结果。" />
+            </StackPanel>
+
+            <Button Content="验证界面功能（不连接数据库）" Click="RunSmoke_Click" Width="280" />
+            <Button Content="检查数据库连接（MySql）" Click="TestDb_Click" Width="280" />
+            <Button Content="加载示例结果（用于看图）" Click="LoadSample_Click" Width="280" />
+            <TextBlock x:Name="TxtStatus" TextWrapping="Wrap" />
+        </StackPanel>
+    </Grid>
+</Page>
+

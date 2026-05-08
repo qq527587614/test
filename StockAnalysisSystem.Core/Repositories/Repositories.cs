@@ -159,6 +159,29 @@ public class StockDailyDataRepository : IStockDailyDataRepository
             throw;
         }
     }
+
+    public async Task<List<StockDailyData>> GetByStockIdsAndDateRangeAsync(IReadOnlyList<string> stockIds, DateTime startDate, DateTime endDate)
+    {
+        try
+        {
+            if (stockIds == null || stockIds.Count == 0)
+                return new List<StockDailyData>();
+
+            var context = GetContext();
+            return await context.StockDailyData
+                .Where(d => stockIds.Contains(d.StockID) && d.TradeDate >= startDate && d.TradeDate <= endDate)
+                .OrderBy(d => d.StockID)
+                .ThenBy(d => d.TradeDate)
+                .ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            ErrorLogger.Log(ex,
+                $"Method: {nameof(GetByStockIdsAndDateRangeAsync)} | Repository: StockDailyDataRepository",
+                new { StockIdsCount = stockIds?.Count ?? 0, StartDate = startDate, EndDate = endDate });
+            throw;
+        }
+    }
 }
 
 /// <summary>
@@ -247,6 +270,29 @@ public class IndicatorRepository : IIndicatorRepository
             ErrorLogger.Log(ex,
                 $"Method: {nameof(GetByDateRangeAsync)} | Repository: IndicatorRepository",
                 new { StartDate = startDate, EndDate = endDate });
+            throw;
+        }
+    }
+
+    public async Task<List<StockDailyIndicator>> GetByStockIdsAndDateRangeAsync(IReadOnlyList<string> stockIds, DateTime startDate, DateTime endDate)
+    {
+        try
+        {
+            if (stockIds == null || stockIds.Count == 0)
+                return new List<StockDailyIndicator>();
+
+            var context = GetContext();
+            return await context.StockDailyIndicators
+                .Where(i => stockIds.Contains(i.StockId) && i.TradeDate >= startDate && i.TradeDate <= endDate)
+                .OrderBy(i => i.StockId)
+                .ThenBy(i => i.TradeDate)
+                .ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            ErrorLogger.Log(ex,
+                $"Method: {nameof(GetByStockIdsAndDateRangeAsync)} | Repository: IndicatorRepository",
+                new { StockIdsCount = stockIds?.Count ?? 0, StartDate = startDate, EndDate = endDate });
             throw;
         }
     }
