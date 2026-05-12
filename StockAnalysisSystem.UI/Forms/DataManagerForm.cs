@@ -27,6 +27,8 @@ public partial class DataManagerForm : Form
     private Button _btnSyncLimitUpByDaily = null!;
     private Button _btnSyncPlate = null!;
     private Button _btnCalcPlateDaily = null!;
+    private Button _btnSyncEarnings = null!;
+    private NumericUpDown _nudEarningsPeriods = null!;
     private ProgressBar _progressBar = null!;
     private TextBox _txtLog = null!;
 
@@ -143,12 +145,28 @@ public partial class DataManagerForm : Form
 
         platePanel.Controls.AddRange(new Control[] { _btnSyncPlate, _btnCalcPlateDaily });
 
+        // 业绩数据管理面板
+        var earningsPanel = new GroupBox { Text = "业绩数据管理", Dock = DockStyle.Top, Height = 70, Padding = new Padding(10) };
+        var lblPeriods = new Label { Text = "最近报告期数:", Left = 20, Top = 27, Width = 90 };
+        _nudEarningsPeriods = new NumericUpDown
+        {
+            Left = 115,
+            Top = 22,
+            Width = 60,
+            Minimum = 1,
+            Maximum = 40,
+            Value = 8
+        };
+        _btnSyncEarnings = new Button { Text = "同步业绩", Left = 190, Top = 22, Width = 120, Height = 28, BackColor = Color.MistyRose };
+        _btnSyncEarnings.Click += BtnSyncEarnings_Click;
+        earningsPanel.Controls.AddRange(new Control[] { lblPeriods, _nudEarningsPeriods, _btnSyncEarnings });
+
         // 日志面板
         var logPanel = new GroupBox { Text = "操作日志", Dock = DockStyle.Fill };
         _txtLog = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical };
         logPanel.Controls.Add(_txtLog);
 
-        Controls.AddRange(new Control[] { logPanel, platePanel, dailyPanel, statsPanel });
+        Controls.AddRange(new Control[] { logPanel, earningsPanel, platePanel, dailyPanel, statsPanel });
 
         Text = "数据管理";
     }
@@ -485,6 +503,55 @@ public partial class DataManagerForm : Form
         {
             _btnCalcPlateDaily.Enabled = true;
         }
+    }
+
+    private async void BtnSyncEarnings_Click(object? sender, EventArgs e)
+    {
+        var n = (int)_nudEarningsPeriods.Value;
+        var result = MessageBox.Show(
+            $"确定要同步业绩数据吗？\n\n将按“最近 {n} 个报告期”拉取业绩报表数据并写入数据库。\n该操作可能耗时较长，请保持网络畅通。",
+            "确认同步业绩",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning);
+
+        if (result != DialogResult.Yes)
+            return;
+
+        _btnSyncEarnings.Enabled = false;
+        _progressBar.Style = ProgressBarStyle.Marquee;
+        Log($"开始同步业绩数据：最近 {n} 个报告期…");
+
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var svc = scope.ServiceProvider.GetRequiredService<EarningsSyncService>();
+            var progress = new Progress<string>(msg => Log(msg));
+
+            var sync = await svc.SyncRecentReportPeriodsAsync(n, asOfDate: DateTime.Today, progress);
+            Log($"业绩同步完成：成功期数={sync.OkPeriods} 失败期数={sync.FailedPeriods} 新增={sync.InsertedRows} 更新={sync.UpdatedRows}");
+        }
+        catch (Exception ex)
+        {
+            Log($"同步业绩失败: {FormatExceptionChain(ex)}");
+        }
+        finally
+        {
+            _progressBar.Style = ProgressBarStyle.Blocks;
+            _btnSyncEarnings.Enabled = true;
+        }
+    }
+
+    private static string FormatExceptionChain(Exception ex)
+    {
+        var sb = new System.Text.StringBuilder();
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            if (sb.Length > 0)
+                sb.Append(" → ");
+            sb.Append(e.Message);
+        }
+
+        return sb.ToString();
     }
 
     private void Log(string message)

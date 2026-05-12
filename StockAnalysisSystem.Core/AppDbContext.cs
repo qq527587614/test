@@ -17,6 +17,7 @@ public class AppDbContext : DbContext
     public DbSet<StockInfo> StockInfos { get; set; }
     public DbSet<StockDailyData> StockDailyData { get; set; }
     public DbSet<StockLimitUpAnalysis> StockLimitUpAnalysis { get; set; }
+    public DbSet<StockEarningsReport> StockEarningsReports { get; set; }
 
     // 板块相关表
     public DbSet<Plate> Plates { get; set; }
@@ -87,6 +88,16 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<StockFavorite>(entity =>
         {
             entity.HasIndex(e => e.StockCode).IsUnique().HasDatabaseName("uk_stockcode");
+        });
+
+        // StockEarningsReport 配置
+        modelBuilder.Entity<StockEarningsReport>(entity =>
+        {
+            entity.HasIndex(e => new { e.stock_code, e.report_date })
+                .IsUnique()
+                .HasDatabaseName("uk_stock_report_date");
+            entity.HasIndex(e => e.report_date).HasDatabaseName("idx_report_date");
+            entity.HasIndex(e => e.stock_code).HasDatabaseName("idx_stock_code");
         });
 
         // Plate 配置

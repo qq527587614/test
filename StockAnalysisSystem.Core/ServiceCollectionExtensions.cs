@@ -74,6 +74,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<StockFavoriteService>();
         services.AddScoped<PlateService>();
         services.AddScoped<LimitUpSyncService>();
+        services.AddScoped<EarningsSyncService>();
         services.AddScoped<TencentDailyKLineSyncService>();
         services.AddScoped<HotSpotLimitUpMa5Picker>();
         services.AddScoped<IKLineDataService, KLineDataService>();

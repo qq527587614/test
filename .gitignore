@@ -39,5 +39,8 @@ appsettings.Local.json
 logs/
 *.log
 
+# Local build artifacts
+artifacts/
+
 # Comate
 .comate/
