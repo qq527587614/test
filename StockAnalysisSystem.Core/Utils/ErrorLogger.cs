@@ -17,6 +17,28 @@ namespace StockAnalysisSystem.Core.Utils
             LogDir, $"error_{DateTime.Now:yyyyMMdd}.log");
 
         /// <summary>
+        /// 诊断日志（分时接口等），写入 <c>logs/{prefix}_{yyyyMMdd}.log</c>，与 error 日志分离便于排查。
+        /// </summary>
+        public static void LogDiagnostics(string fileNamePrefix, string title, string body)
+        {
+            try
+            {
+                Directory.CreateDirectory(LogDir);
+                var path = Path.Combine(LogDir, $"{fileNamePrefix}_{DateTime.Now:yyyyMMdd}.log");
+                var logContent = new StringBuilder()
+                    .AppendLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {title}")
+                    .AppendLine(body.TrimEnd())
+                    .AppendLine(new string('=', 72))
+                    .AppendLine();
+                File.AppendAllText(path, logContent.ToString());
+            }
+            catch
+            {
+                // 忽略
+            }
+        }
+
+        /// <summary>
         /// 记录异常到日志文件
         /// </summary>
         /// <param name="ex">异常对象（可传入null只记录信息）</param>
@@ -76,6 +98,9 @@ namespace StockAnalysisSystem.Core.Utils
                 // 确保日志记录本身不会导致程序崩溃
             }
         }
+
+        /// <summary>日志目录（通常为 exe 同级的 <c>logs</c>，含 <c>minute_chart_*.log</c>、<c>error_*.log</c>）。</summary>
+        public static string LogsDirectory => LogDir;
 
         /// <summary>
         /// 获取当前日志文件路径

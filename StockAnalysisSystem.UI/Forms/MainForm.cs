@@ -65,10 +65,17 @@ public partial class MainForm : Form
         pickMenu.DropDownItems.Add("每日选股(&D)", null, ShowDailyPickForm);
         pickMenu.DropDownItems.Add("选股历史(&H)", null, ShowPickHistoryForm);
         pickMenu.DropDownItems.Add("热点选股(&T)", null, ShowHotSpotPickForm);
+        pickMenu.DropDownItems.Add("成交额Top20回踩5日线(&A)", null, ShowTopAmountMa5PickForm);
+        pickMenu.DropDownItems.Add("热门板块实时分析选股(&R)", null, ShowHotPlateRealtimePickForm);
         pickMenu.DropDownItems.Add(new ToolStripSeparator());
         pickMenu.DropDownItems.Add("DeepSeek板块分析(&D)", null, ShowDeepSeekMarketAnalysisForm);
         pickMenu.DropDownItems.Add("板块分析(&B)", null, ShowPlateAnalysisForm);
         menuStrip.Items.Add(pickMenu);
+
+        // 分析菜单
+        var analysisMenu = new ToolStripMenuItem("分析(&A)");
+        analysisMenu.DropDownItems.Add("涨停分析(&L)", null, ShowLimitUpAnalysisForm);
+        menuStrip.Items.Add(analysisMenu);
 
         // K线图菜单
         var klineMenu = new ToolStripMenuItem("K线图(&K)");
@@ -164,6 +171,24 @@ public partial class MainForm : Form
     private void ShowHotSpotPickForm(object? sender, EventArgs e)
     {
         var form = _serviceProvider.GetRequiredService<HotSpotPickForm>();
+        ShowInMainPanel(form);
+    }
+
+    private void ShowTopAmountMa5PickForm(object? sender, EventArgs e)
+    {
+        var form = _serviceProvider.GetRequiredService<TopAmountMa5PickForm>();
+        ShowInMainPanel(form);
+    }
+
+    private void ShowHotPlateRealtimePickForm(object? sender, EventArgs e)
+    {
+        var form = _serviceProvider.GetRequiredService<HotPlateRealtimePickForm>();
+        ShowInMainPanel(form);
+    }
+
+    private void ShowLimitUpAnalysisForm(object? sender, EventArgs e)
+    {
+        var form = _serviceProvider.GetRequiredService<LimitUpAnalysisForm>();
         ShowInMainPanel(form);
     }
 

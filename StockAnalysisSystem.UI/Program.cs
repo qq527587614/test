@@ -63,6 +63,9 @@ static class Program
             services.AddTransient<OptimizationForm>();
             services.AddTransient<DailyPickForm>();
             services.AddTransient<HotSpotPickForm>();
+            services.AddTransient<TopAmountMa5PickForm>();
+            services.AddTransient<HotPlateRealtimePickForm>();
+            services.AddTransient<LimitUpAnalysisForm>();
             services.AddTransient<DataManagerForm>();
             services.AddTransient<FavoriteForm>();
             services.AddTransient<PlateAnalysisForm>();

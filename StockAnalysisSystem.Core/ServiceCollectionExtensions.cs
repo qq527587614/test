@@ -74,7 +74,12 @@ public static class ServiceCollectionExtensions
         services.AddScoped<StockFavoriteService>();
         services.AddScoped<PlateService>();
         services.AddScoped<LimitUpSyncService>();
+        services.AddScoped<EastMoneyHotRankService>();
+        services.AddSingleton<SinaMinuteChartService>();
+        services.AddScoped<LimitUpReviewService>();
         services.AddScoped<EarningsSyncService>();
+        services.AddScoped<TopAmountMa5PickService>();
+        services.AddScoped<HotPlateRealtimePickService>();
         services.AddScoped<TencentDailyKLineSyncService>();
         services.AddScoped<HotSpotLimitUpMa5Picker>();
         services.AddScoped<IKLineDataService, KLineDataService>();

@@ -1,4 +1,7 @@
 using System.Drawing.Drawing2D;
+using System.Drawing.Text;
+using System.Globalization;
+using System.Linq;
 using StockAnalysisSystem.Core.RealtimeData;
 using StockAnalysisSystem.Core.Utils;
 
@@ -6,6 +9,13 @@ namespace StockAnalysisSystem.UI.Forms;
 
 public partial class MinuteChartForm : Form
 {
+    /// <summary>交易时段内「从 9:30 起」的分钟坐标上界（含 15:00 对应 240）。</summary>
+    private const int SessionMinuteMax = 240;
+    private const int LeftPriceLabelWidth = 62;
+    private const int BottomTimeBand = 26;
+    private const float PriceAreaRatio = 0.72f;
+    private const float VolumeAreaRatio = 0.22f;
+
     private readonly SinaMinuteChartService _chartService;
     private readonly string _stockCode;
     private readonly string _stockName;
@@ -20,34 +30,43 @@ public partial class MinuteChartForm : Form
     private Button _btnRefresh = null!;
 
     private List<MinuteChartData> _minuteData = new();
-    private decimal _yesterdayClose = 0;  // 昨收价，用于计算涨跌
-    private decimal _dayChangePercent = 0;  // 当日涨跌幅（来自实时数据）
+    private decimal _yesterdayClose;
+    /// <summary>当日涨跌幅（百分点，如 9.98 表示 9.98%）。</summary>
+    private decimal _dayChangePctPoints;
+    private readonly bool _useMainBoardPctAxis;
+
+    /// <summary>与当前 K 线对齐的横轴：按 <see cref="MinuteChartData.MinutesFromStart"/> 最小/最大拉伸到全宽。</summary>
+    private int _xMinuteLo;
+    private int _xMinuteHi;
 
     public MinuteChartForm(string stockCode, string stockName, decimal currentPrice, decimal changePercent)
     {
         _chartService = new SinaMinuteChartService();
-        _stockCode = NormalizeCode(stockCode);
+        _stockCode = SinaMinuteChartService.NormalizeToCode6(stockCode);
         _stockName = stockName;
+        _market = SinaMinuteChartService.ResolveExchangeMarket(_stockCode);
+        _useMainBoardPctAxis = IsMainBoardTenPercentLimitBoard(_stockCode);
 
-        // 保存当日涨跌幅（来自实时数据）
-        _dayChangePercent = changePercent;
-
-        // 根据代码判断市场
-        _market = _stockCode.StartsWith("60") || _stockCode.StartsWith("68") ? "SH" : "SZ";
-
-        // 计算昨收价
-        if (currentPrice != 0 && changePercent != 0)
-        {
-            _yesterdayClose = currentPrice / (1 + changePercent / 100);
-        }
+        _dayChangePctPoints = PercentPointNormalization.ToChangePercentPoints(changePercent, currentPrice);
+        if (currentPrice > 0 && _dayChangePctPoints != 0)
+            _yesterdayClose = currentPrice / (1 + _dayChangePctPoints / 100m);
 
         InitializeComponent();
         LoadDataAsync();
     }
 
-    private string NormalizeCode(string code)
+    /// <summary>沪/深主板约 ±10% 涨跌停：60 沪市主板、00 深市主板（不含创业板 30、科创板 68 等）。</summary>
+    private static bool IsMainBoardTenPercentLimitBoard(string code6)
     {
-        return code.Replace("sz", "").Replace("sh", "").Trim();
+        if (string.IsNullOrEmpty(code6) || code6.Length < 2) return false;
+        return code6.StartsWith("60", StringComparison.Ordinal)
+               || code6.StartsWith("00", StringComparison.Ordinal);
+    }
+
+    private static decimal ChangePercentFromYesterday(decimal price, decimal yesterdayClose)
+    {
+        if (yesterdayClose <= 0) return 0;
+        return (price - yesterdayClose) / yesterdayClose * 100m;
     }
 
     private void InitializeComponent()
@@ -56,7 +75,6 @@ public partial class MinuteChartForm : Form
         Size = new Size(900, 600);
         StartPosition = FormStartPosition.CenterParent;
 
-        // 标题栏
         var topPanel = new Panel { Dock = DockStyle.Top, Height = 85, Padding = new Padding(10) };
 
         _lblTitle = new Label
@@ -86,7 +104,6 @@ public partial class MinuteChartForm : Form
             AutoSize = true
         };
 
-        // 切换周期
         var lblScale = new Label { Text = "周期:", Left = 450, Top = 48, Width = 40 };
         _cbScale = new ComboBox
         {
@@ -100,37 +117,39 @@ public partial class MinuteChartForm : Form
         _cbScale.SelectedIndexChanged += CbScale_SelectedIndexChanged;
 
         _btnRefresh = new Button { Text = "刷新", Left = 580, Top = 42, Width = 60, Height = 26 };
-        _btnRefresh.Click += (s, e) => LoadDataAsync();
+        _btnRefresh.Click += (_, _) => LoadDataAsync();
 
         _lblStatus = new Label
         {
             Text = "加载中...",
             Left = 650,
             Top = 48,
-            Width = 200,
+            Width = 420,
+            AutoSize = false,
             ForeColor = Color.Gray
         };
 
         topPanel.Controls.AddRange(new Control[] { _lblTitle, _lblPrice, _lblChange, lblScale, _cbScale, _btnRefresh, _lblStatus });
 
-        // 图表面板
-        _chartPanel = new Panel
+        _chartPanel = new DoubleBufferedChartPanel
         {
             Dock = DockStyle.Fill,
-            BackColor = Color.Black,
-            Padding = new Padding(40, 20, 20, 40)
+            BackColor = Color.FromArgb(18, 18, 22),
+            Padding = new Padding(0)
         };
         _chartPanel.Paint += ChartPanel_Paint;
 
-        // 底部信息
         var bottomPanel = new Panel { Dock = DockStyle.Bottom, Height = 30, BackColor = Color.FromArgb(30, 30, 30) };
         var lblInfo = new Label
         {
-            Text = "数据来源: 新浪财经",
+            Text = _useMainBoardPctAxis
+                ? "数据来源: 新浪财经 | 黄虚线=VWAP(Σ成交额/Σ成交量) | 灰=昨收(0%) | 蓝=开盘 | 左轴=相对昨收涨跌幅(00/60 主板 ±10% 刻度)"
+                : "数据来源: 新浪财经 | 黄虚线=VWAP(累计成交额/累计成交量) | 灰=昨收 | 蓝=首根开盘价",
             Dock = DockStyle.Fill,
             ForeColor = Color.Gray,
             TextAlign = ContentAlignment.MiddleLeft,
-            Padding = new Padding(10, 0, 0, 0)
+            Padding = new Padding(10, 0, 0, 0),
+            Font = new Font("微软雅黑", 8f)
         };
         bottomPanel.Controls.Add(lblInfo);
 
@@ -139,23 +158,26 @@ public partial class MinuteChartForm : Form
         Controls.Add(topPanel);
     }
 
-    private void CbScale_SelectedIndexChanged(object? sender, EventArgs e)
+    private sealed class DoubleBufferedChartPanel : Panel
     {
-        LoadDataAsync();
+        public DoubleBufferedChartPanel()
+        {
+            DoubleBuffered = true;
+            ResizeRedraw = true;
+        }
     }
 
-    private int GetSelectedScale()
+    private void CbScale_SelectedIndexChanged(object? sender, EventArgs e) => LoadDataAsync();
+
+    private int GetSelectedScale() => _cbScale.SelectedIndex switch
     {
-        return _cbScale.SelectedIndex switch
-        {
-            0 => 1,
-            1 => 5,
-            2 => 15,
-            3 => 30,
-            4 => 60,
-            _ => 1
-        };
-    }
+        0 => 1,
+        1 => 5,
+        2 => 15,
+        3 => 30,
+        4 => 60,
+        _ => 1
+    };
 
     private async void LoadDataAsync()
     {
@@ -164,14 +186,21 @@ public partial class MinuteChartForm : Form
             _lblStatus.Text = "加载中...";
             _btnRefresh.Enabled = false;
 
+            if (string.IsNullOrEmpty(_stockCode) || _stockCode.Length != 6 || !_stockCode.All(char.IsDigit))
+            {
+                _lblStatus.Text = "股票代码无效，无法拉取分时";
+                _chartPanel.Invalidate();
+                return;
+            }
+
             var scale = GetSelectedScale();
-            var (data, error) = await _chartService.GetMinuteChartDataAsync(_stockCode, _market, scale, null);
+            var (data, error) = await _chartService.GetMinuteChartDataAsync(_stockCode, scale, null);
 
             if (!string.IsNullOrEmpty(error))
             {
                 _lblStatus.Text = error;
+                ErrorLogger.LogDiagnostics("minute_chart", "MinuteChartForm 拉取失败", $"code={_stockCode} market={_market}\n{error}");
                 _chartPanel.Invalidate();
-                _btnRefresh.Enabled = true;
                 return;
             }
 
@@ -179,23 +208,37 @@ public partial class MinuteChartForm : Form
             {
                 _lblStatus.Text = "暂无数据";
                 _chartPanel.Invalidate();
-                _btnRefresh.Enabled = true;
                 return;
             }
 
-            _minuteData = data;
+            // 去掉 15:00 之后的 K 线（接口偶发盘后/无效时间戳）；再按时间排序
+            var sessionBars = data.Where(d => !IsBarAfterRegularSession(d)).ToList();
+            _minuteData = sessionBars
+                .OrderBy(d => d.MinutesFromStart)
+                .ThenBy(d => d.Time ?? "", StringComparer.Ordinal)
+                .ToList();
 
-            // 更新价格显示
-            // 使用当日总体涨跌幅（来自实时数据），而不是分时图的最后一个数据点
-            var latest = _minuteData.Last();
-            var changePercent = _dayChangePercent;
-            var change = _yesterdayClose > 0 ? latest.Close - _yesterdayClose : latest.Change;
+            if (_minuteData.Count == 0)
+            {
+                _lblStatus.Text = "暂无数据";
+                _chartPanel.Invalidate();
+                return;
+            }
 
+            var mins = _minuteData.Select(d => d.MinutesFromStart).ToList();
+            _xMinuteLo = Math.Max(0, mins.Min());
+            _xMinuteHi = Math.Min(SessionMinuteMax, Math.Max(_xMinuteLo + 1, mins.Max()));
+
+            var latest = _minuteData[^1];
             _lblPrice.Text = $"当前价: {latest.Close:F2}";
-            _lblChange.Text = $"涨跌幅: {changePercent:+0.00;-0.00}%";
-            _lblChange.ForeColor = changePercent >= 0 ? Color.Red : Color.Lime;
 
-            _lblStatus.Text = $"共 {_minuteData.Count} 条数据";
+            if (_yesterdayClose > 0 && latest.Close > 0)
+                _dayChangePctPoints = ChangePercentFromYesterday(latest.Close, _yesterdayClose);
+
+            _lblChange.Text = $"涨跌幅: {_dayChangePctPoints:+0.00;-0.00}%";
+            _lblChange.ForeColor = _dayChangePctPoints >= 0 ? Color.FromArgb(220, 80, 80) : Color.FromArgb(80, 200, 120);
+
+            _lblStatus.Text = $"共 {_minuteData.Count} 根K线 | 横轴 {_xMinuteLo}–{_xMinuteHi} 分";
             _chartPanel.Invalidate();
         }
         catch (Exception ex)
@@ -210,220 +253,267 @@ public partial class MinuteChartForm : Form
         }
     }
 
+    /// <summary>是否应视为「常规交易结束」之后的无效/盘后 K 线（不含 15:00 当根）。</summary>
+    private static bool IsBarAfterRegularSession(MinuteChartData d)
+    {
+        if (d.MinutesFromStart > SessionMinuteMax)
+            return true;
+        if (TryParseBarClockMinutes(d.Time, out var clock))
+            return clock > 15 * 60;
+        return false;
+    }
+
+    private static bool TryParseBarClockMinutes(string? time, out int clockMinutes)
+    {
+        clockMinutes = 0;
+        if (string.IsNullOrWhiteSpace(time)) return false;
+        var tail = time.Contains(' ')
+            ? time.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)[^1]
+            : time;
+        var seg = tail.Split(':');
+        if (seg.Length < 2) return false;
+        if (!int.TryParse(seg[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var h)) return false;
+        if (!int.TryParse(seg[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var mi)) return false;
+        clockMinutes = h * 60 + mi;
+        return true;
+    }
+
+    private float XFromMinutes(RectangleF chartRect, int minutesFromStart)
+    {
+        var span = Math.Max(1, _xMinuteHi - _xMinuteLo);
+        var t = (minutesFromStart - _xMinuteLo) / (float)span;
+        t = Math.Clamp(t, 0f, 1f);
+        return chartRect.Left + t * chartRect.Width;
+    }
+
+    private static (decimal Min, decimal Max) GetPriceBounds(IReadOnlyList<MinuteChartData> data, decimal yesterdayClose)
+    {
+        var list = new List<decimal>(data.Count * 4 + 4);
+        foreach (var d in data)
+        {
+            list.Add(d.High);
+            list.Add(d.Low);
+            list.Add(d.Close);
+            list.Add(d.AvgPrice);
+        }
+
+        if (data.Count > 0)
+            list.Add(data[0].Open);
+
+        if (yesterdayClose > 0)
+            list.Add(yesterdayClose);
+
+        var min = list.Min();
+        var max = list.Max();
+        var pad = (max - min);
+        if (pad == 0) pad = Math.Abs(min) * 0.01m;
+        if (pad == 0) pad = 0.01m;
+        min -= pad * 0.08m;
+        max += pad * 0.08m;
+        return (min, max);
+    }
+
+    private static float YFromLinearAxis(RectangleF chartRect, decimal value, decimal minV, decimal maxV)
+    {
+        var range = maxV - minV;
+        if (range <= 0) return chartRect.Top + chartRect.Height / 2f;
+        var t = (double)((value - minV) / range);
+        t = Math.Clamp(t, 0, 1);
+        return chartRect.Bottom - (float)t * chartRect.Height;
+    }
+
     private void ChartPanel_Paint(object? sender, PaintEventArgs e)
     {
         if (_minuteData.Count == 0) return;
 
         var g = e.Graphics;
-        var rect = _chartPanel.ClientRectangle;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+        g.PixelOffsetMode = PixelOffsetMode.Half;
 
-        // 设置坐标区域
-        // 左边60像素给价格标签，底部30像素给时间标签
-        // 顶部区域给价格图，底部1/4区域给量能图
-        var totalHeight = rect.Height - 60;
-        var priceChartHeight = (float)(totalHeight * 0.72);  // 价格图占72%
-        var volumeChartHeight = (float)(totalHeight * 0.22); // 量能图占22%
-        var chartRect = new RectangleF(rect.Left + 60, rect.Top + 10, rect.Width - 80, priceChartHeight);
-        var volumeRect = new RectangleF(rect.Left + 60, chartRect.Bottom + 10, rect.Width - 80, volumeChartHeight);
+        var client = _chartPanel.ClientRectangle;
+        using (var bg = new SolidBrush(_chartPanel.BackColor))
+            g.FillRectangle(bg, client);
 
-        // 计算价格范围
-        var prices = _minuteData.Select(d => d.High).Concat(_minuteData.Select(d => d.Low)).ToList();
-        var minPrice = prices.Min();
-        var maxPrice = prices.Max();
+        var left = LeftPriceLabelWidth;
+        var rightPad = 10;
+        var topPad = 8;
+        var innerH = Math.Max(80, client.Height - topPad - BottomTimeBand);
+        var priceH = innerH * PriceAreaRatio;
+        var gap = 6f;
+        var volH = innerH * VolumeAreaRatio;
+        var chartRect = new RectangleF(left, topPad, Math.Max(20f, client.Width - left - rightPad), priceH);
+        var volumeRect = new RectangleF(left, chartRect.Bottom + gap, chartRect.Width, volH);
 
-        // 扩展价格范围
-        var priceRange = maxPrice - minPrice;
-        if (priceRange == 0) priceRange = minPrice * 0.02m;
-        minPrice -= priceRange * 0.1m;
-        maxPrice += priceRange * 0.1m;
-
-        // 昨收价线
-        var yesterdayCloseY = _yesterdayClose > 0
-            ? chartRect.Bottom - (float)((_yesterdayClose - minPrice) / (maxPrice - minPrice)) * chartRect.Height
-            : chartRect.Bottom - chartRect.Height / 2;
-
-        // 绘制昨收价线（灰色虚线）
-        if (_yesterdayClose > 0)
+        // 00/60 主板：纵轴为相对昨收的涨跌幅（%），固定 ±10% 刻度；其余：纵轴为价格
+        var usePctAxis = _useMainBoardPctAxis && _yesterdayClose > 0;
+        decimal minA, maxA;
+        if (usePctAxis)
         {
-            using var pen = new Pen(Color.FromArgb(100, 128, 128, 128)) { DashStyle = DashStyle.Dash };
-            g.DrawLine(pen, chartRect.Left, yesterdayCloseY, chartRect.Right, yesterdayCloseY);
-
-            // 昨收价标签
-            using var brush = new SolidBrush(Color.Gray);
-            g.DrawString($"昨收 {_yesterdayClose:F2}", new Font("Arial", 8), brush, chartRect.Right - 70, yesterdayCloseY - 10);
+            minA = -10m;
+            maxA = 10m;
+        }
+        else
+        {
+            (minA, maxA) = GetPriceBounds(_minuteData, _yesterdayClose);
         }
 
-        // 绘制分时线
-        if (_minuteData.Count > 1)
+        float YAt(decimal price)
         {
-            using var linePen = new Pen(Color.FromArgb(255, 238, 105, 88), 2);  // 上涨红色
-            using var fillBrush = new SolidBrush(Color.FromArgb(50, 255, 0, 0));
-
-            var points = new List<PointF>();
-            var fillPoints = new List<PointF>();
-
-            for (int i = 0; i < _minuteData.Count; i++)
-            {
-                var x = chartRect.Left + (float)_minuteData[i].MinutesFromStart / 240 * chartRect.Width;
-                var y = chartRect.Bottom - (float)((_minuteData[i].Close - minPrice) / (maxPrice - minPrice)) * chartRect.Height;
-                points.Add(new PointF(x, y));
-                fillPoints.Add(new PointF(x, y));
-            }
-
-            // 填充区域
-            if (points.Count > 0)
-            {
-                fillPoints.Insert(0, new PointF(points[0].X, chartRect.Bottom));
-                fillPoints.Add(new PointF(points[points.Count - 1].X, chartRect.Bottom));
-
-                var isUp = _minuteData.Last().Close >= _minuteData.First().Open;
-                fillBrush.Color = isUp ? Color.FromArgb(30, 255, 50, 50) : Color.FromArgb(30, 50, 255, 50);
-                linePen.Color = isUp ? Color.Red : Color.Lime;
-
-                g.FillPolygon(fillBrush, fillPoints.ToArray());
-                g.DrawLines(linePen, points.ToArray());
-            }
-
-            // 绘制整日均价线（黄色）
-            using var avgPen = new Pen(Color.Yellow, 2) { DashStyle = DashStyle.Dash };
-            var avgPoints = new List<PointF>();
-            for (int i = 0; i < _minuteData.Count; i++)
-            {
-                var x = chartRect.Left + (float)_minuteData[i].MinutesFromStart / 240 * chartRect.Width;
-                var avgY = chartRect.Bottom - (float)((_minuteData[i].AvgPrice - minPrice) / (maxPrice - minPrice)) * chartRect.Height;
-                avgPoints.Add(new PointF(x, avgY));
-            }
-            if (avgPoints.Count > 1)
-            {
-                g.DrawLines(avgPen, avgPoints.ToArray());
-            }
+            var axisVal = usePctAxis ? ChangePercentFromYesterday(price, _yesterdayClose) : price;
+            return YFromLinearAxis(chartRect, axisVal, minA, maxA);
         }
 
-        // 绘制零轴线（今日开盘价）
-        if (_minuteData.Count > 0)
-        {
-            var openPrice = _minuteData.First().Open;
-            var zeroY = chartRect.Bottom - (float)((openPrice - minPrice) / (maxPrice - minPrice)) * chartRect.Height;
+        using var axisFont = new Font("微软雅黑", 8f);
+        using var titleFont = new Font("微软雅黑", 8.5f, FontStyle.Bold);
+        using var gridPen = new Pen(Color.FromArgb(45, 90, 90, 95), 1f);
+        using var minorGridPen = new Pen(Color.FromArgb(28, 60, 60, 65), 1f);
 
-            using var zeroPen = new Pen(Color.Blue, 1) { DashStyle = DashStyle.Dash };
-            g.DrawLine(zeroPen, chartRect.Left, zeroY, chartRect.Right, zeroY);
-
-            using var zeroBrush = new SolidBrush(Color.Blue);
-            g.DrawString($"开盘 {openPrice:F2}", new Font("Arial", 8), zeroBrush, chartRect.Right - 80, zeroY - 10);
-        }
-
-        // 绘制价格网格和标签
-        using var gridPen = new Pen(Color.FromArgb(40, 255, 255, 255));
-        using var labelBrush = new SolidBrush(Color.Gray);
-
-        var gridLines = 5;
-        for (int i = 0; i <= gridLines; i++)
+        // 1) 价格区水平网格
+        const int gridLines = 5;
+        for (var i = 0; i <= gridLines; i++)
         {
             var y = chartRect.Top + chartRect.Height / gridLines * i;
-            var price = maxPrice - (maxPrice - minPrice) / gridLines * i;
-
-            g.DrawLine(gridPen, chartRect.Left, y, chartRect.Right, y);
-            g.DrawString(price.ToString("F2"), new Font("Arial", 8), labelBrush, 2, y - 6);
+            var pen = i == 0 || i == gridLines ? gridPen : minorGridPen;
+            g.DrawLine(pen, chartRect.Left, y, chartRect.Right, y);
+            var axisTick = maxA - (maxA - minA) / gridLines * i;
+            var label = usePctAxis ? $"{axisTick:+0.0;-0.0}%" : axisTick.ToString("F2");
+            var sz = g.MeasureString(label, axisFont);
+            g.DrawString(label, axisFont, Brushes.DimGray, chartRect.Left - sz.Width - 4, y - sz.Height / 2);
         }
 
-        // 绘制量能图
-        var maxVolume = _minuteData.Max(d => d.Volume);
-        if (maxVolume > 0)
+        // 2) 昨收、开盘参考线
+        if (_yesterdayClose > 0)
         {
-            // 绘制量能区域背景
-            using var bgBrush = new SolidBrush(Color.FromArgb(20, 255, 255, 255));
-            g.FillRectangle(bgBrush, volumeRect);
-
-            // 绘制量能分隔线
-            using var volumeSepPen = new Pen(Color.FromArgb(80, 255, 255, 255));
-            g.DrawLine(volumeSepPen, chartRect.Left, volumeRect.Top - 5, chartRect.Right, volumeRect.Top - 5);
-
-            // 绘制量能柱状图
-            for (int i = 0; i < _minuteData.Count; i++)
-            {
-                var x = volumeRect.Left + (float)_minuteData[i].MinutesFromStart / 240 * volumeRect.Width;
-                var barWidth = Math.Max(2, volumeRect.Width / _minuteData.Count - 1);
-                var volumeHeight = (float)(_minuteData[i].Volume / maxVolume) * volumeRect.Height;
-                var y = volumeRect.Bottom - volumeHeight;
-
-                // 根据涨跌设置颜色
-                var barColor = _minuteData[i].Close >= _minuteData[i].Open
-                    ? Color.FromArgb(180, 255, 50, 50)   // 涨红色
-                    : Color.FromArgb(180, 50, 255, 50);  // 跌绿色
-                using var barBrush = new SolidBrush(barColor);
-                g.FillRectangle(barBrush, x - barWidth / 2, y, barWidth, volumeHeight);
-            }
-
-            // 绘制量能均量线
-            var avgVolume = (float)maxVolume * 0.3f;
-            var avgVolumeY = volumeRect.Bottom - avgVolume;
-            using var avgVolPen = new Pen(Color.Yellow, 1) { DashStyle = DashStyle.Dash };
-            g.DrawLine(avgVolPen, volumeRect.Left, avgVolumeY, volumeRect.Right, avgVolumeY);
-
-            // 绘制量能标签
-            using var volLabelBrush = new SolidBrush(Color.Gray);
-            g.DrawString($"量能 {maxVolume / 10000:F0}万", new Font("Arial", 8), volLabelBrush, 2, volumeRect.Top + 2);
+            var yy = YAt(_yesterdayClose);
+            using var pen = new Pen(Color.FromArgb(140, 140, 140), 1f) { DashStyle = DashStyle.Dash };
+            g.DrawLine(pen, chartRect.Left, yy, chartRect.Right, yy);
+            var ycNote = usePctAxis ? $"昨收 {_yesterdayClose:F2} (0%)" : $"昨收 {_yesterdayClose:F2}";
+            g.DrawString(ycNote, axisFont, Brushes.Gray, chartRect.Right - 110, yy - 14);
         }
 
-        // 绘制时间轴（横轴）- 固定时间刻度 9:30 - 15:00
-        using var timePen = new Pen(Color.FromArgb(150, 255, 255, 255), 1);
-        using var timeBrush = new SolidBrush(Color.White);
-
-        // 固定时间点：9:30, 10:00, 10:30, 11:00, 13:00, 13:30, 14:00, 14:30, 15:00 (11:30和13:00合并)
-        var fixedTimes = new[] { 930, 1000, 1030, 1100, 1300, 1330, 1400, 1430, 1500 };
-        var timeLabels = new[] { "09:30", "10:00", "10:30", "11:00", "13:00", "13:30", "14:00", "14:30", "15:00" };
-
-        // 交易时段总分钟数 = 上午120分钟 + 下午120分钟 = 240分钟
-        const int totalTradingMinutes = 240;
-
-        for (int i = 0; i < fixedTimes.Length; i++)
+        if (_minuteData.Count > 0)
         {
-            var time = fixedTimes[i];
-            int minutesFromStart;
-
-            // 把时间格式 (如 930, 1000, 1030) 转换成从午夜开始的分钟数
-            // 例如: 930 -> 9*60+30=570, 1000 -> 10*60+0=600
-            int timeInMinutes = (time / 100) * 60 + (time % 100);
-
-            if (time < 1300)
-            {
-                // 上午时段 (9:30 - 11:30)
-                minutesFromStart = timeInMinutes - 570;
-            }
-            else
-            {
-                // 下午时段 (13:00 - 15:00)
-                // 下午时间 = 120(上午) + (当前分钟 - 780)，合并午休
-                // 13:00 -> 120 + 0 = 120 (与11:30位置相同，合并)
-                // 13:30 -> 120 + 30 = 150
-                // 15:00 -> 120 + 120 = 240
-                minutesFromStart = 120 + (timeInMinutes - 780);
-            }
-
-            // 计算x坐标
-            var x = chartRect.Left + (float)minutesFromStart / totalTradingMinutes * chartRect.Width;
-
-            // 绘制垂直刻度线（穿过价格图和量能图）
-            g.DrawLine(timePen, x, chartRect.Top - 5, x, volumeRect.Bottom + 15);
-
-            // 绘制时间标签（放在量能图下方）
-            g.DrawString(timeLabels[i], new Font("Arial", 8), timeBrush, x - 15, volumeRect.Bottom + 2);
+            var open = _minuteData[0].Open;
+            var oy = YAt(open);
+            using var pen = new Pen(Color.FromArgb(120, 100, 160, 230), 1f) { DashStyle = DashStyle.Dash };
+            g.DrawLine(pen, chartRect.Left, oy, chartRect.Right, oy);
+            var openNote = usePctAxis && _yesterdayClose > 0
+                ? $"开盘 {open:F2} ({ChangePercentFromYesterday(open, _yesterdayClose):+0.00;-0.00}%)"
+                : $"开盘 {open:F2}";
+            g.DrawString(openNote, axisFont, Brushes.SteelBlue, chartRect.Right - 110, oy + 2);
         }
 
-        // 绘制底部时间轴线
-        g.DrawLine(timePen, volumeRect.Left, volumeRect.Bottom + 12, volumeRect.Right, volumeRect.Bottom + 12);
+        // 3) 价格折线 + 昨收轴上填充
+        var pts = new List<PointF>(_minuteData.Count);
+        for (var i = 0; i < _minuteData.Count; i++)
+        {
+            var d = _minuteData[i];
+            pts.Add(new PointF(XFromMinutes(chartRect, d.MinutesFromStart), YAt(d.Close)));
+        }
 
-        // 绘制最新价格
-        var latestData = _minuteData.Last();
-        var lastX = chartRect.Left + (float)latestData.MinutesFromStart / 240 * chartRect.Width;
-        var lastY = chartRect.Bottom - (float)((latestData.Close - minPrice) / (maxPrice - minPrice)) * chartRect.Height;
+        if (pts.Count > 1)
+        {
+            var up = _minuteData[^1].Close >= _minuteData[0].Open;
+            var fillTop = _yesterdayClose > 0
+                ? YAt(_yesterdayClose)
+                : chartRect.Top + chartRect.Height * 0.5f;
 
-        // 最新价圆点
-        using var dotBrush = new SolidBrush(latestData.Close >= latestData.Open ? Color.Red : Color.Lime);
-        g.FillEllipse(dotBrush, lastX - 4, lastY - 4, 8, 8);
+            var poly = new List<PointF>(pts.Count + 2);
+            poly.Add(new PointF(pts[0].X, fillTop));
+            poly.AddRange(pts);
+            poly.Add(new PointF(pts[^1].X, fillTop));
 
-        // 最新价标签
-        var priceLabel = latestData.Close.ToString("F2");
-        g.DrawString(priceLabel, new Font("Arial", 9, FontStyle.Bold), dotBrush, lastX - 25, lastY - 20);
+            using var fill = new SolidBrush(up ? Color.FromArgb(28, 220, 60, 60) : Color.FromArgb(28, 60, 200, 120));
+            g.FillPolygon(fill, poly.ToArray());
+
+            using var linePen = new Pen(up ? Color.FromArgb(230, 230, 80, 80) : Color.FromArgb(230, 80, 200, 120), 1.8f);
+            g.DrawLines(linePen, pts.ToArray());
+        }
+
+        // 4) 累计均价 VWAP（黄虚线）
+        if (_minuteData.Count > 1)
+        {
+            var avgPts = new List<PointF>(_minuteData.Count);
+            for (var i = 0; i < _minuteData.Count; i++)
+            {
+                var d = _minuteData[i];
+                avgPts.Add(new PointF(XFromMinutes(chartRect, d.MinutesFromStart), YAt(d.AvgPrice)));
+            }
+
+            using var avgPen = new Pen(Color.FromArgb(220, 230, 200, 80), 1.4f) { DashStyle = DashStyle.Dash };
+            g.DrawLines(avgPen, avgPts.ToArray());
+        }
+
+        // 5) 量能
+        var maxVol = _minuteData.Max(d => d.Volume);
+        if (maxVol > 0 && volumeRect.Height > 4)
+        {
+            using var volBg = new SolidBrush(Color.FromArgb(22, 30, 30, 35));
+            g.FillRectangle(volBg, volumeRect);
+
+            using var sep = new Pen(Color.FromArgb(70, 80, 80, 88), 1f);
+            g.DrawLine(sep, chartRect.Left, volumeRect.Top - 2, chartRect.Right, volumeRect.Top - 2);
+
+            var n = _minuteData.Count;
+            var barW = Math.Max(1f, volumeRect.Width / Math.Max(n, SessionMinuteMax) * 0.85f);
+
+            for (var i = 0; i < n; i++)
+            {
+                var d = _minuteData[i];
+                var cx = XFromMinutes(volumeRect, d.MinutesFromStart);
+                var h = (float)(d.Volume / maxVol) * volumeRect.Height;
+                var y = volumeRect.Bottom - h;
+                var upBar = d.Close >= d.Open;
+                using var b = new SolidBrush(upBar ? Color.FromArgb(160, 220, 70, 70) : Color.FromArgb(160, 70, 190, 110));
+                g.FillRectangle(b, cx - barW / 2f, y, barW, h);
+            }
+
+            g.DrawString($"量 max {maxVol:0}", axisFont, Brushes.DimGray, volumeRect.Left, volumeRect.Top + 2);
+        }
+
+        // 6) 时间竖线（与横轴映射一致；同一 X 只画一根，避免 11:30/13:00 重合重复）
+        using var timePen = new Pen(Color.FromArgb(100, 120, 125, 130), 1f);
+        var fixedTimes = new[] { 930, 1000, 1030, 1100, 1130, 1300, 1330, 1400, 1430, 1500 };
+        var timeLabels = new[] { "09:30", "10:00", "10:30", "11:00", "11:30", "13:00", "13:30", "14:00", "14:30", "15:00" };
+
+        float? lastTickX = null;
+        for (var i = 0; i < fixedTimes.Length; i++)
+        {
+            var ms = WallClockToMinutesFromStart(fixedTimes[i]);
+            if (ms < _xMinuteLo || ms > _xMinuteHi) continue;
+            var x = XFromMinutes(chartRect, ms);
+            if (lastTickX.HasValue && Math.Abs(x - lastTickX.Value) < 1.5f)
+                continue;
+            lastTickX = x;
+            g.DrawLine(timePen, x, chartRect.Top, x, volumeRect.Bottom);
+            g.DrawString(timeLabels[i], axisFont, Brushes.LightGray, x - 16, volumeRect.Bottom + 4);
+        }
+
+        g.DrawLine(timePen, volumeRect.Left, volumeRect.Bottom + 2, volumeRect.Right, volumeRect.Bottom + 2);
+
+        // 7) 最新价圆点
+        if (pts.Count > 0)
+        {
+            var last = _minuteData[^1];
+            var lx = XFromMinutes(chartRect, last.MinutesFromStart);
+            var ly = YAt(last.Close);
+            var upDot = last.Close >= _minuteData[0].Open;
+            using var dot = new SolidBrush(upDot ? Color.FromArgb(255, 240, 90, 90) : Color.FromArgb(255, 90, 220, 120));
+            g.FillEllipse(dot, lx - 4, ly - 4, 8, 8);
+            var dotLabel = usePctAxis && _yesterdayClose > 0
+                ? $"{last.Close:F2} ({ChangePercentFromYesterday(last.Close, _yesterdayClose):+0.00;-0.00}%)"
+                : last.Close.ToString("F2");
+            g.DrawString(dotLabel, titleFont, dot, lx - 48, ly - 22);
+        }
+    }
+
+    /// <summary>墙上时钟 HHmm → 从 9:30 起的连续分钟序号（午休压缩在 120 处对接下午）。</summary>
+    private static int WallClockToMinutesFromStart(int hhmm)
+    {
+        var hm = hhmm / 100 * 60 + hhmm % 100;
+        if (hhmm <= 1130)
+            return hm - (9 * 60 + 30);
+        return 120 + (hm - (13 * 60));
     }
 }
