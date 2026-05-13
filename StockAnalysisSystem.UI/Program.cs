@@ -70,6 +70,7 @@ static class Program
             services.AddTransient<FavoriteForm>();
             services.AddTransient<PlateAnalysisForm>();
             services.AddTransient<DeepSeekMarketAnalysisForm>();
+            services.AddTransient<AiStockPickForm>();
             services.AddTransient<KLineForm>();
 
             // 构建服务提供者

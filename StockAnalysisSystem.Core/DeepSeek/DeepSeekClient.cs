@@ -74,6 +74,62 @@ public class DeepSeekClient
     }
 
     /// <summary>
+    /// 通用对话：发送单条 user 消息，返回模型回复正文（从 OpenAI 兼容 JSON 的 choices[0].message.content 解析）。用于 AI 选股等自由文本场景。
+    /// </summary>
+    /// <param name="userPrompt">完整用户提示词。</param>
+    /// <param name="usedFor">写入 DeepSeekLog 的用途标记。</param>
+    public async Task<string?> ChatCompletionTextAsync(string userPrompt, string usedFor = "AiStockPick")
+    {
+        if (string.IsNullOrEmpty(_settings.ApiKey))
+        {
+            _logger?.LogWarning("DeepSeek API密钥未配置");
+            return null;
+        }
+
+        try
+        {
+            var response = await SendRequestAsync(userPrompt);
+            var preview = userPrompt.Length > 2000 ? userPrompt[..2000] + "…(截断)" : userPrompt;
+            await _logRepo.AddAsync(new Entities.DeepSeekLog
+            {
+                RequestData = JsonSerializer.Serialize(new { usedFor, promptLength = userPrompt.Length, promptPreview = preview }),
+                ResponseData = string.IsNullOrEmpty(response) ? "null" : response,
+                UsedFor = usedFor
+            });
+
+            if (string.IsNullOrEmpty(response))
+                return null;
+
+            var text = ExtractAssistantContent(response);
+            return string.IsNullOrWhiteSpace(text) ? response : text;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "DeepSeek ChatCompletionTextAsync 失败");
+            return null;
+        }
+    }
+
+    /// <summary>从 DeepSeek/OpenAI 兼容 HTTP 响应体中取出 assistant 文本。</summary>
+    private static string? ExtractAssistantContent(string responseBody)
+    {
+        try
+        {
+            using var outer = JsonDocument.Parse(responseBody);
+            if (!outer.RootElement.TryGetProperty("choices", out var choices) || choices.GetArrayLength() == 0)
+                return null;
+            var first = choices[0];
+            if (!first.TryGetProperty("message", out var message) || !message.TryGetProperty("content", out var contentEl))
+                return null;
+            return contentEl.GetString();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// 发送请求到DeepSeek API
     /// </summary>
     private async Task<string?> SendRequestAsync(string prompt)

@@ -23,6 +23,12 @@ public sealed class HotPlateRealtimePickOptions
     public int MaxResults { get; init; } = 15;
 
     public int MaxDegreeOfParallelism { get; init; } = 5;
+
+    /// <summary>分析前是否调用财联社接口同步当日（或所选日）涨停表，与「板块分析」一致。</summary>
+    public bool SyncClsLimitUpBeforePick { get; init; } = true;
+
+    /// <summary>板块分析页同款：板块内成分股不少于该数量才参与热点排序。</summary>
+    public int MinStocksPerPlate { get; init; } = 10;
 }
 
 public sealed class HotPlateRealtimePickRow
@@ -65,17 +71,20 @@ public sealed class HotPlateRealtimePickService
     private readonly SinaMinuteChartService _sinaMinute;
     private readonly TencentRealtimeService _tencent;
     private readonly EastMoneyHotRankService _hotRank;
+    private readonly PlateAnalysisPickDataService _platePick;
 
     public HotPlateRealtimePickService(
         AppDbContext db,
         SinaMinuteChartService sinaMinute,
         TencentRealtimeService tencent,
-        EastMoneyHotRankService hotRank)
+        EastMoneyHotRankService hotRank,
+        PlateAnalysisPickDataService platePick)
     {
         _db = db;
         _sinaMinute = sinaMinute;
         _tencent = tencent;
         _hotRank = hotRank;
+        _platePick = platePick;
     }
 
     public async Task<HotPlateRealtimePickResult> AnalyzeAsync(
@@ -89,6 +98,22 @@ public sealed class HotPlateRealtimePickService
 
         var sessionEnd = session.AddDays(1);
         var windowStart = session.AddDays(-30);
+
+        string? syncNote = null;
+        if (options.SyncClsLimitUpBeforePick)
+        {
+            progress?.Report("正在从财联社同步涨停数据（与板块分析页一致）…");
+            var n = await _platePick.SyncClsLimitUpForDateAsync(session, ct).ConfigureAwait(false);
+            if (n < 0)
+                syncNote = "财联社涨停同步失败（网络或接口），已使用库内原有涨停表。";
+            else if (n == 0)
+                syncNote = $"财联社返回 {session:yyyy-MM-dd} 无有效涨停写入，已使用库内原有数据。";
+            else
+                syncNote = $"已同步财联社涨停 {n} 条。";
+            progress?.Report(syncNote);
+        }
+        else
+            syncNote = "未执行财联社同步（可在参数中开启）。";
 
         progress?.Report("读取当日涨停并统计热点题材…");
         var todayRaw = await _db.StockLimitUpAnalysis.AsNoTracking()
@@ -114,42 +139,53 @@ public sealed class HotPlateRealtimePickService
             plateCounts[p] = plateCounts.GetValueOrDefault(p) + 1;
         }
 
-        var plateAvgChg = new Dictionary<string, decimal>(StringComparer.Ordinal);
-        if (session == DateTime.Today.Date)
-        {
-            progress?.Report("拉取当日涨停股腾讯实时涨幅，计算题材内平均涨跌（板块实时维度）…");
-            var codes = mergedToday.Select(x => x.Code6).Distinct(StringComparer.Ordinal).ToList();
-            var rt = await FetchTencentByCode6Async(codes, ct).ConfigureAwait(false);
-            var sum = new Dictionary<string, (decimal Sum, int N)>(StringComparer.Ordinal);
-            foreach (var m in mergedToday)
-            {
-                if (!rt.TryGetValue(m.Code6, out var row))
-                    continue;
-                var plate = GetPrimaryPlate(m.Plates);
-                if (IsExcludedHotPlate(plate))
-                    continue;
-                var e = sum.GetValueOrDefault(plate);
-                e.Sum += row.ChangePercent;
-                e.N += 1;
-                sum[plate] = e;
-            }
-
-            foreach (var kv in sum)
-            {
-                if (kv.Value.N > 0)
-                    plateAvgChg[kv.Key] = Math.Round(kv.Value.Sum / kv.Value.N, 3, MidpointRounding.AwayFromZero);
-            }
-        }
-
-        var rankedPlates = plateCounts.Keys
-            .Where(p => !IsExcludedHotPlate(p))
-            .Select(p => (Name: p, Count: plateCounts[p], AvgChg: plateAvgChg.GetValueOrDefault(p, 0m)))
-            .OrderByDescending(x => x.Count * 50m + x.AvgChg)
-            .Take(Math.Max(1, options.MaxHotPlates))
-            .Select(x => x.Name)
+        progress?.Report("按「板块分析」口径聚合实时/日线并取热点板块…");
+        var rankedPlates = (await _platePick
+                .GetHotPlatesByPlateAnalysisAsync(session, options.MaxHotPlates, options.MinStocksPerPlate, ct)
+                .ConfigureAwait(false))
             .ToList();
 
+        var usedPlateAnalysis = rankedPlates.Count > 0;
+        if (!usedPlateAnalysis)
+        {
+            progress?.Report("板块分析口径无可用热点，回退为涨停家数+实时涨幅加权…");
+            var plateAvgChg = new Dictionary<string, decimal>(StringComparer.Ordinal);
+            if (session == DateTime.Today.Date)
+            {
+                var codes = mergedToday.Select(x => x.Code6).Distinct(StringComparer.Ordinal).ToList();
+                var rt = await FetchTencentByCode6Async(codes, ct).ConfigureAwait(false);
+                var sum = new Dictionary<string, (decimal Sum, int N)>(StringComparer.Ordinal);
+                foreach (var m in mergedToday)
+                {
+                    if (!rt.TryGetValue(m.Code6, out var row))
+                        continue;
+                    var plate = GetPrimaryPlate(m.Plates);
+                    if (IsExcludedHotPlate(plate))
+                        continue;
+                    var e = sum.GetValueOrDefault(plate);
+                    e.Sum += row.ChangePercent;
+                    e.N += 1;
+                    sum[plate] = e;
+                }
+
+                foreach (var kv in sum)
+                {
+                    if (kv.Value.N > 0)
+                        plateAvgChg[kv.Key] = Math.Round(kv.Value.Sum / kv.Value.N, 3, MidpointRounding.AwayFromZero);
+                }
+            }
+
+            rankedPlates = plateCounts.Keys
+                .Where(p => !IsExcludedHotPlate(p))
+                .Select(p => (Name: p, Count: plateCounts[p], AvgChg: plateAvgChg.GetValueOrDefault(p, 0m)))
+                .OrderByDescending(x => x.Count * 50m + x.AvgChg)
+                .Take(Math.Max(1, options.MaxHotPlates))
+                .Select(x => x.Name)
+                .ToList();
+        }
+
         var hotSet = new HashSet<string>(rankedPlates, StringComparer.Ordinal);
+        var narrativeUsedPlateAnalysis = usedPlateAnalysis;
         if (hotSet.Count == 0)
         {
             var fb = plateCounts
@@ -166,6 +202,7 @@ public sealed class HotPlateRealtimePickService
 
             hotSet.Add(fb);
             rankedPlates = new List<string> { fb };
+            narrativeUsedPlateAnalysis = false;
         }
 
         progress?.Report("扫描近 30 日涨停记录，匹配热点题材成分…");
@@ -190,7 +227,7 @@ public sealed class HotPlateRealtimePickService
             var name = names.FirstOrDefault() ?? "";
             var plateParts = g.Select(x => x.plate_name ?? "")
                 .Where(p => !string.IsNullOrWhiteSpace(p))
-                .SelectMany(p => p.Split('、', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                .SelectMany(SplitPlateNameTokens)
                 .Distinct(StringComparer.Ordinal)
                 .ToList();
             var mergedPlates = string.Join("、", plateParts);
@@ -341,7 +378,7 @@ public sealed class HotPlateRealtimePickService
             .Take(Math.Max(1, options.MaxResults))
             .ToList();
 
-        var narrative = BuildNarrative(session, rankedPlates, mergedToday.Count, candidates.Count, sorted);
+        var narrative = BuildNarrative(session, rankedPlates, mergedToday.Count, candidates.Count, sorted, syncNote, narrativeUsedPlateAnalysis);
         progress?.Report($"完成，输出 {sorted.Count} 条。");
         return new HotPlateRealtimePickResult(session, rankedPlates, narrative, sorted);
     }
@@ -512,18 +549,36 @@ public sealed class HotPlateRealtimePickService
         return ("不建议新建仓", detail + "。分数一般或追涨风险偏高，仅作复盘参考。");
     }
 
+    private static IEnumerable<string> SplitPlateNameTokens(string? plateName)
+    {
+        if (string.IsNullOrWhiteSpace(plateName)) yield break;
+        foreach (var seg in plateName.Split(new[] { '、', ';', '；', ',' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var t = seg.Trim();
+            if (t.Length > 0)
+                yield return t;
+        }
+    }
+
     private static string BuildNarrative(
         DateTime session,
         IReadOnlyList<string> hotPlates,
         int todayLimitMergedCount,
         int candidateCount,
-        IReadOnlyList<HotPlateRealtimePickRow> picks)
+        IReadOnlyList<HotPlateRealtimePickRow> picks,
+        string? syncNote,
+        bool usedPlateAnalysis)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"【{session:yyyy-MM-dd} 热门板块实时分析选股】");
         sb.AppendLine();
         sb.AppendLine("一、口径说明（必读）");
-        sb.AppendLine("- 热点题材：以**当日涨停表**中各股「主题材」出现频次为主；若分析日为今天，则再按**当日涨停股所属题材内腾讯实时涨跌幅均值**做加权排序（与「板块分析」页当日逻辑一致的数据来源维度）。");
+        if (!string.IsNullOrWhiteSpace(syncNote))
+            sb.AppendLine($"- **同步**：{syncNote}");
+        if (usedPlateAnalysis)
+            sb.AppendLine("- **热点板块**：与「选股 → 板块分析」相同逻辑——全表涨停映射成分股，分析日使用**腾讯实时**（今天）或**日线**（历史日）计算各板块平均涨幅，家数≥配置阈值后按涨幅排序取前 N；剔除 ST/其他等归类板块。");
+        else
+            sb.AppendLine("- **热点板块**：板块分析口径下无可用板块时，**回退**为当日涨停表主题材家数 +（若今日）题材内实时涨幅均值的加权排序。");
         sb.AppendLine("- **剔除规则**：不参与热点统计的板块包括 ST 板块、风险警示/退市整理类题材名，以及「其他」「其它」「其他板块」「其它板块」等归类板块；**ST / *ST / S*ST** 等风险警示证券不进入候选与结果。");
         sb.AppendLine("- 候选池：近 **30 个自然日**内在涨停表出现、且题材与上述热点之一相交的股票（非仅上一交易日）。");
         sb.AppendLine("- 打分：日线位置（贴近 MA5 等）+ 新浪 1 分钟分时质量 + 腾讯实时涨跌偏好 + 东财热度，均为**启发式**，**不构成投资建议**。");

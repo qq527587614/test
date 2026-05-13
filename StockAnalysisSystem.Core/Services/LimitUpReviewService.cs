@@ -478,7 +478,7 @@ public sealed class LimitUpReviewService
         sb.AppendLine("- 热度排名：东方财富 xuangu 热度榜（数值越小越热）。");
         var scored = stocks.Count(s => s.MinuteQualityScore.HasValue);
         sb.AppendLine(
-            $"- 分时质量：{scored}/{stocks.Count} 已按新浪 1 分钟 K 线+当日日线 OHLC 自动计分（封板段数、分时均线上方占比、日内振幅），并折入综合分；其余股票见表格「分时备注」。");
+            $"- 分时质量：{scored}/{stocks.Count} 已按新浪 1 分钟 K 线+当日日线 OHLC 自动计分（封板段数、VWAP 与分时 MA5 上方占比、量价与尾/首段量能比、日内振幅），并折入综合分；其余股票见表格「分时备注」。");
         sb.AppendLine($"- 当日匹配到日线的股票数：{dailyMatchCount}；热度榜返回条目数：{hotRankCount}。");
         sb.AppendLine();
 

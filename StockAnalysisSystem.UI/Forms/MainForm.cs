@@ -93,6 +93,10 @@ public partial class MainForm : Form
         dataMenu.DropDownItems.Add("指标预计算(&C)", null, ShowDataManagerForm);
         menuStrip.Items.Add(dataMenu);
 
+        var aiMenu = new ToolStripMenuItem("AI(&I)");
+        aiMenu.DropDownItems.Add("AI选股(&Q)", null, ShowAiStockPickForm);
+        menuStrip.Items.Add(aiMenu);
+
         // 帮助菜单
         var helpMenu = new ToolStripMenuItem("帮助(&H)");
         helpMenu.DropDownItems.Add("关于(&A)", null, (s, e) => 
@@ -213,6 +217,12 @@ public partial class MainForm : Form
     private void ShowDeepSeekMarketAnalysisForm(object? sender, EventArgs e)
     {
         var form = _serviceProvider.GetRequiredService<DeepSeekMarketAnalysisForm>();
+        ShowInMainPanel(form);
+    }
+
+    private void ShowAiStockPickForm(object? sender, EventArgs e)
+    {
+        var form = _serviceProvider.GetRequiredService<AiStockPickForm>();
         ShowInMainPanel(form);
     }
 

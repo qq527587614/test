@@ -5,7 +5,8 @@ using StockAnalysisSystem.Core.RealtimeData;
 namespace StockAnalysisSystem.Core.Services;
 
 /// <summary>
-/// 涨停日分时质量启发式评分（1 分钟 K 线 + 当日日线 OHLC），用于复盘粗筛。
+/// 涨停日分时质量启发式评分（1 分钟 K 线 + 当日日线 OHLC）。
+/// 维度：封板段数、分时 VWAP 上方占比、分时 MA5 上方占比、量价与相对量能、日线振幅。
 /// </summary>
 public static class LimitUpMinuteQualityAnalyzer
 {
@@ -30,7 +31,7 @@ public static class LimitUpMinuteQualityAnalyzer
         if (dailyOpen <= 0 || dailyHigh <= 0)
             return (60m, "日线 OHLC 不完整，分时质量分参考性弱");
 
-        // 1) 封在涨停价附近的「段」数：一段内曾贴近 High，跌离后再回封算多段（烂板）
+        // 1) 封在涨停价附近的「段」数
         var sealEpisodes = CountSealEpisodes(ordered, dailyHigh);
         var sealScore = sealEpisodes switch
         {
@@ -41,22 +42,15 @@ public static class LimitUpMinuteQualityAnalyzer
         };
 
         // 2) 收盘价在分时均价（累计 VWAP）上方的比例
-        var aboveAvg = 0;
-        var n = 0;
-        foreach (var b in ordered)
-        {
-            if (b.AvgPrice <= 0) continue;
-            n++;
-            if (b.Close >= b.AvgPrice) aboveAvg++;
-        }
+        var (vwapRatio, vwapScore) = ScoreVwapAboveRatio(ordered);
 
-        var ratio = n > 0 ? (decimal)aboveAvg / n : 0.5m;
-        var avgScore = ratio >= 0.82m ? 100m
-            : ratio >= 0.70m ? 85m
-            : ratio >= 0.55m ? 70m
-            : 52m;
+        // 3) 分时 MA5（收盘）上方占比
+        var (maRatio, maScore) = ScoreMa5AboveRatio(ordered);
 
-        // 3) 日内振幅 (High-Low)/Open：涨停日适度振幅更「稳」，过大视为分歧大
+        // 4) 量价 + 相对量能（有量上涨占比、尾盘/早盘量比）
+        var (volSummary, volScore) = ScoreVolumeQuality(ordered);
+
+        // 5) 日内振幅（日线）
         var amplitude = dailyHigh > dailyLow && dailyOpen > 0
             ? (dailyHigh - dailyLow) / dailyOpen * 100m
             : 0m;
@@ -65,12 +59,150 @@ public static class LimitUpMinuteQualityAnalyzer
             : amplitude <= 18m ? 68m
             : 50m;
 
-        var score = Math.Round(0.48m * sealScore + 0.35m * avgScore + 0.17m * ampScore, 2, MidpointRounding.AwayFromZero);
+        const decimal wSeal = 0.26m;
+        const decimal wVwap = 0.22m;
+        const decimal wMa = 0.18m;
+        const decimal wVol = 0.18m;
+        const decimal wAmp = 0.16m;
+
+        var score = Math.Round(
+            wSeal * sealScore + wVwap * vwapScore + wMa * maScore + wVol * volScore + wAmp * ampScore,
+            2,
+            MidpointRounding.AwayFromZero);
         score = Math.Clamp(score, 0m, 100m);
 
         var summary =
-            $"封板段数≈{sealEpisodes}，均线上方占比{(ratio * 100m):0.#}%，振幅{amplitude:0.#}%";
+            $"封板段≈{sealEpisodes}，VWAP上{(vwapRatio * 100m):0.#}%，MA5上{(maRatio * 100m):0.#}%，{volSummary}，振幅{amplitude:0.#}%";
         return (score, summary);
+    }
+
+    private static (decimal Ratio, decimal Score) ScoreVwapAboveRatio(IReadOnlyList<MinuteChartData> ordered)
+    {
+        var above = 0;
+        var n = 0;
+        foreach (var b in ordered)
+        {
+            if (b.AvgPrice <= 0) continue;
+            n++;
+            if (b.Close >= b.AvgPrice) above++;
+        }
+
+        var ratio = n > 0 ? (decimal)above / n : 0.5m;
+        var s = ratio >= 0.82m ? 100m
+            : ratio >= 0.70m ? 85m
+            : ratio >= 0.55m ? 70m
+            : 52m;
+        return (ratio, s);
+    }
+
+    /// <summary>各根收盘的 5 周期简单均线（前 4 根无定义，内部用 0 占位）。</summary>
+    private static decimal[] ComputeMinuteMa5(IReadOnlyList<MinuteChartData> ordered)
+    {
+        var n = ordered.Count;
+        var ma = new decimal[n];
+        for (var i = 0; i < n; i++)
+        {
+            if (i < 4)
+            {
+                ma[i] = 0m;
+                continue;
+            }
+
+            var sum = 0m;
+            for (var j = i - 4; j <= i; j++)
+                sum += ordered[j].Close;
+            ma[i] = sum / 5m;
+        }
+
+        return ma;
+    }
+
+    private static (decimal Ratio, decimal Score) ScoreMa5AboveRatio(IReadOnlyList<MinuteChartData> ordered)
+    {
+        if (ordered.Count < 10)
+            return (0.5m, 65m);
+
+        var ma = ComputeMinuteMa5(ordered);
+        var above = 0;
+        var denom = 0;
+        for (var i = 4; i < ordered.Count; i++)
+        {
+            if (ma[i] <= 0) continue;
+            denom++;
+            if (ordered[i].Close >= ma[i]) above++;
+        }
+
+        if (denom == 0)
+            return (0.5m, 65m);
+
+        var ratio = (decimal)above / denom;
+        var s = ratio >= 0.78m ? 100m
+            : ratio >= 0.65m ? 86m
+            : ratio >= 0.52m ? 72m
+            : 54m;
+        return (ratio, s);
+    }
+
+    /// <summary>
+    /// 量价：阳线且成交量不低于均量一定比例视为「有量上涨」；尾盘与早盘（各约 20% 根数）均量比。
+    /// </summary>
+    private static (string Summary, decimal Score) ScoreVolumeQuality(IReadOnlyList<MinuteChartData> ordered)
+    {
+        var vols = ordered.Where(b => b.Volume > 0).Select(b => b.Volume).ToList();
+        if (vols.Count == 0)
+            return ("量能数据弱", 65m);
+
+        var avgVol = vols.Average();
+        if (avgVol <= 0)
+            return ("量能数据弱", 65m);
+
+        var sorted = vols.OrderBy(v => v).ToList();
+        var medianVol = sorted[sorted.Count / 2];
+
+        var upBars = 0;
+        var healthyUp = 0;
+        foreach (var b in ordered)
+        {
+            if (b.Close <= b.Open) continue;
+            upBars++;
+            var thr = Math.Max(0.35m * (decimal)avgVol, 1m);
+            if (b.Volume >= thr)
+                healthyUp++;
+        }
+
+        var upRatio = upBars > 0 ? (decimal)healthyUp / upBars : 1m;
+        var upScore = upRatio >= 0.72m ? 100m
+            : upRatio >= 0.55m ? 84m
+            : upRatio >= 0.40m ? 68m
+            : 52m;
+
+        var n = ordered.Count;
+        var seg = Math.Max(3, n / 5);
+        var early = ordered.Take(seg).Where(b => b.Volume > 0).Select(b => b.Volume).DefaultIfEmpty(0m).Average();
+        var late = ordered.Skip(n - seg).Where(b => b.Volume > 0).Select(b => b.Volume).DefaultIfEmpty(0m).Average();
+        decimal lateEarlyRatio;
+        if (early <= 0m)
+            lateEarlyRatio = 1m;
+        else
+            lateEarlyRatio = late / early;
+
+        // 温和放量尾盘参与较好；极端放量或极度缩量扣分
+        var ratioScore = lateEarlyRatio switch
+        {
+            >= 0.85m and <= 2.0m => 95m,
+            >= 0.55m and < 0.85m => 72m,
+            > 2.0m and <= 3.2m => 68m,
+            > 3.2m => 52m,
+            < 0.55m and >= 0.35m => 62m,
+            _ => 50m
+        };
+
+        var combined = Math.Round(0.58m * upScore + 0.42m * ratioScore, 1, MidpointRounding.AwayFromZero);
+        combined = Math.Clamp(combined, 0m, 100m);
+
+        var leTxt = early > 0 ? $"尾/首量比{lateEarlyRatio:0.##}" : "量比—";
+        var summary = $"有量阳{upRatio * 100m:0.#}%，{leTxt}";
+        return (summary, combined);
     }
 
     /// <summary>

@@ -14,6 +14,8 @@ public sealed class HotPlateRealtimePickForm : Form
     private NumericUpDown _numHotPlates = null!;
     private NumericUpDown _numMaxCand = null!;
     private NumericUpDown _numMaxOut = null!;
+    private CheckBox _chkSyncCls = null!;
+    private NumericUpDown _numMinStocksPerPlate = null!;
     private Button _btnRun = null!;
     private DataGridView _grid = null!;
     private TextBox _txtNarrative = null!;
@@ -30,7 +32,7 @@ public sealed class HotPlateRealtimePickForm : Form
         Dock = DockStyle.Fill;
         Text = "热门板块实时分析选股";
 
-        var top = new Panel { Dock = DockStyle.Top, Height = 100, Padding = new Padding(10) };
+        var top = new Panel { Dock = DockStyle.Top, Height = 118, Padding = new Padding(10) };
 
         _dtpSession = new DateTimePicker { Left = 10, Top = 12, Width = 130, Format = DateTimePickerFormat.Short };
         _numHotPlates = new NumericUpDown { Left = 200, Top = 10, Width = 50, Minimum = 3, Maximum = 20, Value = 8 };
@@ -39,6 +41,9 @@ public sealed class HotPlateRealtimePickForm : Form
 
         _btnRun = new Button { Left = 560, Top = 8, Width = 140, Height = 30, Text = "分析选股" };
         _btnRun.Click += async (_, _) => await RunAsync();
+
+        _chkSyncCls = new CheckBox { Left = 10, Top = 42, Width = 200, Text = "分析前同步财联社涨停", Checked = true };
+        _numMinStocksPerPlate = new NumericUpDown { Left = 300, Top = 40, Width = 50, Minimum = 5, Maximum = 50, Value = 10 };
 
         top.Controls.AddRange(new Control[]
         {
@@ -50,15 +55,18 @@ public sealed class HotPlateRealtimePickForm : Form
             _numMaxCand,
             new Label { Left = 440, Top = 0, Width = 120, Text = "输出条数" },
             _numMaxOut,
-            _btnRun
+            _btnRun,
+            _chkSyncCls,
+            new Label { Left = 220, Top = 42, Width = 90, Text = "板块最少家数" },
+            _numMinStocksPerPlate
         });
 
         var warn = new Label
         {
             Left = 10,
-            Top = 48,
+            Top = 68,
             Width = 900,
-            Height = 44,
+            Height = 40,
             Text =
                 "免责声明：本页为程序启发式筛选与文字标签；已排除 ST 股及 ST 板块、其他/其它等归类题材。依据涨停表、日线、分时与公开行情接口，不构成投资建议。请自行核对基本面、公告与交易规则。双击表格一行可打开该股分时图。"
         };
@@ -236,7 +244,9 @@ public sealed class HotPlateRealtimePickForm : Form
                 SessionDate = _dtpSession.Value.Date,
                 MaxHotPlates = (int)_numHotPlates.Value,
                 MaxCandidatesToAnalyze = (int)_numMaxCand.Value,
-                MaxResults = (int)_numMaxOut.Value
+                MaxResults = (int)_numMaxOut.Value,
+                SyncClsLimitUpBeforePick = _chkSyncCls.Checked,
+                MinStocksPerPlate = (int)_numMinStocksPerPlate.Value
             };
 
             var progress = new Progress<string>(Log);
