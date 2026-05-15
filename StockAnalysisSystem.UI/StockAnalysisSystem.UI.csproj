@@ -2,6 +2,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\StockAnalysisSystem.Core\StockAnalysisSystem.Core.csproj" />
+    <ProjectReference Include="..\StockAnalysisSystem.SyncWorker\StockAnalysisSystem.SyncWorker.csproj">
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
   </ItemGroup>
 
   <ItemGroup>
@@ -25,5 +28,17 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
+
+  <!-- 将盘后同步 Worker 复制到主程序输出目录，供「数据管理」内一键安装 Windows 服务 -->
+  <Target Name="CopyPostMarketWorkerIntoUi" AfterTargets="Build">
+    <ItemGroup>
+      <PostMarketSyncFiles Include="$(MSBuildThisFileDirectory)..\StockAnalysisSystem.SyncWorker\bin\$(Configuration)\net8.0-windows\**\*.*"
+                           Exclude="$(MSBuildThisFileDirectory)..\StockAnalysisSystem.SyncWorker\bin\$(Configuration)\net8.0-windows\**\*.pdb" />
+    </ItemGroup>
+    <Copy SourceFiles="@(PostMarketSyncFiles)"
+          DestinationFiles="$(OutputPath)PostMarketSyncService\%(RecursiveDir)%(Filename)%(Extension)"
+          SkipUnchangedFiles="true"
+          Condition="Exists('$(MSBuildThisFileDirectory)..\StockAnalysisSystem.SyncWorker\bin\$(Configuration)\net8.0-windows\StockAnalysisSystem.SyncWorker.exe')" />
+  </Target>
 
 </Project>

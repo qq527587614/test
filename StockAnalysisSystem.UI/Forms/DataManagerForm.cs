@@ -5,6 +5,7 @@ using StockAnalysisSystem.Core.Indicators;
 using StockAnalysisSystem.Core.RealtimeData;
 using StockAnalysisSystem.Core.Repositories;
 using StockAnalysisSystem.Core.Services;
+using StockAnalysisSystem.UI.Services;
 
 namespace StockAnalysisSystem.UI.Forms;
 
@@ -27,6 +28,8 @@ public partial class DataManagerForm : Form
     private Button _btnSyncLimitUpByDaily = null!;
     private Button _btnSyncPlate = null!;
     private Button _btnCalcPlateDaily = null!;
+    private Button _btnInstallPostMarketService = null!;
+    private Button _btnUninstallPostMarketService = null!;
     private Button _btnSyncEarnings = null!;
     private NumericUpDown _nudEarningsPeriods = null!;
     private ProgressBar _progressBar = null!;
@@ -145,6 +148,18 @@ public partial class DataManagerForm : Form
 
         platePanel.Controls.AddRange(new Control[] { _btnSyncPlate, _btnCalcPlateDaily });
 
+        var servicePanel = new GroupBox { Text = "Windows 盘后同步服务", Dock = DockStyle.Top, Height = 58, Padding = new Padding(10) };
+        _btnInstallPostMarketService = new Button { Text = "安装/重装服务", Left = 20, Top = 22, Width = 130, Height = 28, BackColor = Color.PaleTurquoise };
+        _btnInstallPostMarketService.Click += BtnInstallPostMarketService_Click;
+        _btnUninstallPostMarketService = new Button { Text = "卸载服务", Left = 165, Top = 22, Width = 100, Height = 28 };
+        _btnUninstallPostMarketService.Click += BtnUninstallPostMarketService_Click;
+        servicePanel.Controls.AddRange(new Control[]
+        {
+            _btnInstallPostMarketService,
+            _btnUninstallPostMarketService,
+            new Label { Left = 280, Top = 26, Width = 460, Height = 20, Text = "需管理员授权；默认工作日 15:05 后自动同步（与上方数据步骤一致）。" }
+        });
+
         // 业绩数据管理面板
         var earningsPanel = new GroupBox { Text = "业绩数据管理", Dock = DockStyle.Top, Height = 70, Padding = new Padding(10) };
         var lblPeriods = new Label { Text = "最近报告期数:", Left = 20, Top = 27, Width = 90 };
@@ -166,7 +181,7 @@ public partial class DataManagerForm : Form
         _txtLog = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical };
         logPanel.Controls.Add(_txtLog);
 
-        Controls.AddRange(new Control[] { logPanel, earningsPanel, platePanel, dailyPanel, statsPanel });
+        Controls.AddRange(new Control[] { logPanel, earningsPanel, servicePanel, platePanel, dailyPanel, statsPanel });
 
         Text = "数据管理";
     }
@@ -539,6 +554,84 @@ public partial class DataManagerForm : Form
             _progressBar.Style = ProgressBarStyle.Blocks;
             _btnSyncEarnings.Enabled = true;
         }
+    }
+
+    private void BtnInstallPostMarketService_Click(object? sender, EventArgs e)
+    {
+        var workerExe = PostMarketSyncServiceInstaller.GetWorkerExePath();
+        if (!File.Exists(workerExe))
+        {
+            MessageBox.Show(
+                $"未找到同步服务程序：\n{workerExe}\n\n请先完整编译解决方案（会生成 SyncWorker 并复制到 PostMarketSyncService 目录），或参考 StockAnalysisSystem.SyncWorker\\README.md 手动发布。",
+                "无法安装",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        var confirm = MessageBox.Show(
+            "将请求管理员权限，安装或重装 Windows 服务「StockAnalysisSystemPostMarketSync」。\n\n" +
+            "• 会把当前主程序 appsettings.json 中的数据库连接串写入同步服务目录。\n" +
+            "• 服务默认每个工作日 15:05 后执行一次盘后同步。\n\n是否继续？",
+            "安装盘后同步服务",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question);
+
+        if (confirm != DialogResult.Yes)
+            return;
+
+        try
+        {
+            var mainSettings = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+            PostMarketSyncServiceInstaller.MergeConnectionStringFromMainApp(
+                mainSettings,
+                PostMarketSyncServiceInstaller.GetWorkerDirectory());
+
+            if (!PostMarketSyncServiceInstaller.TryLaunchInstall(workerExe, out var err))
+            {
+                MessageBox.Show(err ?? "启动安装失败。", "安装", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Log($"安装服务失败：{err}");
+                return;
+            }
+
+            Log("已弹出 UAC 安装窗口，请在授权后等待批处理执行完毕。");
+            MessageBox.Show(
+                "已弹出管理员授权窗口。\n\n授权后请等待命令窗口结束，然后在「服务」(services.msc) 中查看 StockAnalysisSystemPostMarketSync 是否为「正在运行」。\n日志目录：程序下 PostMarketSyncService\\logs\\",
+                "安装已发起",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            Log($"安装服务异常：{ex.Message}");
+            MessageBox.Show(ex.Message, "安装", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void BtnUninstallPostMarketService_Click(object? sender, EventArgs e)
+    {
+        var confirm = MessageBox.Show(
+            "将请求管理员权限并删除 Windows 服务「StockAnalysisSystemPostMarketSync」。\n\n是否继续？",
+            "卸载盘后同步服务",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning);
+
+        if (confirm != DialogResult.Yes)
+            return;
+
+        if (!PostMarketSyncServiceInstaller.TryLaunchUninstall(out var err))
+        {
+            MessageBox.Show(err ?? "启动卸载失败。", "卸载", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            Log($"卸载服务失败：{err}");
+            return;
+        }
+
+        Log("已弹出 UAC 卸载窗口。");
+        MessageBox.Show(
+            "已弹出管理员授权窗口。完成后服务「StockAnalysisSystemPostMarketSync」将被移除。",
+            "卸载已发起",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
     }
 
     private static string FormatExceptionChain(Exception ex)
